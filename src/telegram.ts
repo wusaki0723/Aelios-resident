@@ -99,14 +99,33 @@ export const COMMANDS = [
   { command: "handoff", description: "现在就写交接信，把旧聊天收起来" }
 ];
 
-export async function setWebhook(config: TelegramConfig, url: string, secret: string): Promise<unknown> {
+/** The text on the bot's menu button that opens the web page as a Mini App. */
+export const MENU_BUTTON_TEXT = "打开网页";
+
+/**
+ * Points the webhook here and lists the commands. With `miniAppUrl` (it must be https), the bot's default menu
+ * button opens that page as a Mini App; without, the menu button is left alone.
+ */
+export async function setWebhook(
+  config: TelegramConfig,
+  url: string,
+  secret: string,
+  { miniAppUrl }: { miniAppUrl?: string } = {}
+): Promise<Record<string, unknown>> {
   const webhook = await call(config, "setWebhook", {
     url,
     secret_token: secret,
     allowed_updates: ["message"]
   });
   const commands = await call(config, "setMyCommands", { commands: COMMANDS });
-  return { setWebhook: await webhook.json(), setMyCommands: await commands.json() };
+  const result: Record<string, unknown> = { setWebhook: await webhook.json(), setMyCommands: await commands.json() };
+  if (miniAppUrl) {
+    const menu = await call(config, "setChatMenuButton", {
+      menu_button: { type: "web_app", text: MENU_BUTTON_TEXT, web_app: { url: miniAppUrl } }
+    });
+    result.setChatMenuButton = await menu.json().catch(() => ({ ok: false, status: menu.status }));
+  }
+  return result;
 }
 
 /** The parts of a Telegram update the Worker reads before handing it to the resident. */

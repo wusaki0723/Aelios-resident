@@ -114,6 +114,23 @@ export function fakeModel(): LanguageModelV4 {
       };
     },
     async doStream(options) {
+      if (lastOf(options.prompt, "user").includes("思考流测试")) {
+        const stream = new ReadableStream<LanguageModelV4StreamPart>({
+          async start(controller) {
+            controller.enqueue({ type: "stream-start", warnings: [] });
+            controller.enqueue({ type: "reasoning-start", id: "r" });
+            controller.enqueue({ type: "reasoning-delta", id: "r", delta: "先想想这一句。" });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            controller.enqueue({ type: "reasoning-end", id: "r" });
+            controller.enqueue({ type: "text-start", id: "t" });
+            controller.enqueue({ type: "text-delta", id: "t", delta: "想好啦。" });
+            controller.enqueue({ type: "text-end", id: "t" });
+            controller.enqueue({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage: usage(100, 10) });
+            controller.close();
+          }
+        });
+        return { stream };
+      }
       const choice = decide(options);
       previous = shape(options);
       const parts: LanguageModelV4StreamPart[] = [{ type: "stream-start", warnings: [] }];

@@ -14,6 +14,16 @@
 })();
 </script>
 <!-- Chat surface: deep-chat (MIT), Alpine.js (MIT) for the rest. Both live in vendor/ so the page needs no CDN. -->
+<script>
+// Ordinary WEB_KEY pages stay entirely local. Load Telegram's bridge only on a Mini App launch.
+window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Promise(function (resolve) {
+  var script = document.createElement('script');
+  script.src = 'https://telegram.org/js/telegram-web-app.js';
+  script.onload = function () { resolve(true); };
+  script.onerror = function () { resolve(false); };
+  document.head.appendChild(script);
+}) : Promise.resolve(true);
+</script>
 <script type="module" src="/vendor/deep-chat-2.5.1.js"></script>
 <script defer src="/vendor/alpine-3.14.9.min.js"></script>
 <style>
@@ -83,8 +93,8 @@
       radial-gradient(1px 1px at 72px 300px, var(--star-2), transparent),
       radial-gradient(1.5px 1.5px at 268px 356px, var(--star-1), transparent); }
 
-  .shell { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100dvh; max-width: 760px; margin: 0 auto; }
-  header { display: flex; align-items: center; gap: 8px; padding: 12px 16px 8px; padding-top: max(12px, env(safe-area-inset-top)); }
+  .shell { position: relative; z-index: 1; display: flex; flex-direction: column; height: var(--app-height, 100dvh); max-width: 760px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 16px 8px; padding-top: max(12px, env(safe-area-inset-top), var(--tg-top, 0px)); }
   header h1 { margin: 0; font-size: 17px; font-weight: 600; }
   header .sub { font-size: 12px; color: var(--text-4); }
   .spacer { flex: 1; }
@@ -202,9 +212,10 @@
   <template x-if="!authed">
     <form class="login" @submit.prevent="login()">
       <h1>住户的网页门</h1>
-      <p>填 Worker 里设的 WEB_KEY。只存在这台设备的浏览器里。</p>
-      <input x-model="keyInput" type="password" autocomplete="current-password" placeholder="网页钥匙" aria-label="网页钥匙">
-      <button type="submit">进门</button>
+      <p x-text="miniApp ? '正在确认 Telegram 身份。只允许白名单里的用户进门。' : '填 Worker 里设的 WEB_KEY。只存在这台设备的浏览器里。'"></p>
+      <input x-show="!miniApp" x-model="keyInput" type="password" autocomplete="current-password" placeholder="网页钥匙" aria-label="网页钥匙">
+      <button x-show="!miniApp" type="submit">进门</button>
+      <button x-show="miniApp && loginError" type="button" @click="window.location.reload()">重新连接</button>
       <div class="error" x-show="loginError" x-text="loginError"></div>
     </form>
   </template>
@@ -423,11 +434,20 @@ function resident() {
     '.pin:hover, .pin.done { color: var(--coral); }',
     '.pin svg { width: 14px; height: 14px; fill: none; }',
     '.pin.done svg { fill: currentColor; }',
+    '.activity { margin: 0 0 8px; font-size: 13px; color: var(--text-3); border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; }',
+    '.activity summary { cursor: pointer; color: var(--text-3); padding: 3px 0; }',
+    '.activity[open] > summary { color: var(--coral); }',
+    '.activity-body { padding: 7px 0; max-height: 50vh; overflow: auto; }',
+    '.activity pre { margin: 5px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; }',
+    '.tool-entry { margin: 5px 0; padding: 6px 9px; border-left: 2px solid var(--panel-border); }',
+    '.tool-entry strong { color: var(--text-2); font-weight: 500; }',
+    '.tool-state { color: var(--text-4); margin-left: 6px; font-size: 11px; }',
+    '.activity-only { min-width: 180px; }',
     '.letter { font-size: 13px; color: var(--text-3); }',
     '.letter summary { cursor: pointer; color: var(--text-2); }',
     '.letter .text { margin-top: 8px; color: var(--text-2); }',
     '.error-message-text { background: var(--panel-bg-strong); color: var(--err); border-color: var(--err); }',
-    '#input { box-sizing: border-box; padding: 0 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }',
+    '#input { box-sizing: border-box; padding: 0 12px; padding-bottom: max(10px, env(safe-area-inset-bottom), var(--tg-bottom, 0px)); }',
     '#text-input-container { width: 100%; margin: 8px 0 0; border-radius: 18px; border: 1px solid var(--panel-border); background: var(--panel-bg-strong); box-shadow: none; max-height: 40vh; }',
     '#text-input-container:focus-within { border-color: var(--coral); }',
     '#text-input { color: var(--text-1); font-size: 16px; line-height: 1.5; padding: 10px 50px 10px 14px; }',
@@ -452,11 +472,17 @@ function resident() {
   var shown = {};
   var serverIds = [];
   var lineText = {};
+  var fingerprints = {};
   // Lines typed on this page whose server copy has not come back yet (deep-chat shows them at once).
   var typed = [];
+  // Keep the SDK out of Alpine's deep proxy: its non-configurable properties reject proxy wrapping.
+  var telegram = null;
 
   return {
     key: readKey(),
+    miniApp: false,
+    miniToken: '',
+    miniExpires: 0,
     keyInput: '',
     authed: false,
     loginError: '',
@@ -494,14 +520,69 @@ function resident() {
         self.catalog = data.models || [];
         self.catalogUpdated = data.updated || '';
       }).catch(function () {});
-      if (this.key) await this.check(this.key);
+      var miniLaunch = /(?:^#|[&#])tgWebAppData=/.test(location.hash);
+      this.miniApp = miniLaunch;
+      var readyBridge = await Promise.race([window.telegramReady, new Promise(function (resolve) { setTimeout(resolve, 10000, false); })]);
+      if (miniLaunch && !readyBridge) { this.loginError = 'Telegram 组件没加载出来，请关闭小窗后重新打开'; return; }
+      var tg = window.Telegram && window.Telegram.WebApp;
+      if (miniLaunch && (!tg || !tg.initData)) { this.loginError = '没有收到 Telegram 的身份信息，请关闭小窗后重新打开'; return; }
+      if (tg && tg.initData) {
+        this.miniApp = true;
+        telegram = tg;
+        this.key = '';
+        tg.ready();
+        tg.expand();
+        var viewport = function () {
+          var style = document.documentElement.style;
+          if (tg.viewportHeight) style.setProperty('--app-height', tg.viewportHeight + 'px');
+          style.setProperty('--tg-top', Math.max(tg.safeAreaInset && tg.safeAreaInset.top || 0, tg.contentSafeAreaInset && tg.contentSafeAreaInset.top || 0) + 'px');
+          style.setProperty('--tg-bottom', Math.max(tg.safeAreaInset && tg.safeAreaInset.bottom || 0, tg.contentSafeAreaInset && tg.contentSafeAreaInset.bottom || 0) + 'px');
+        };
+        viewport();
+        ['viewportChanged', 'safeAreaChanged', 'contentSafeAreaChanged'].forEach(function (event) { tg.onEvent(event, viewport); });
+        tg.onEvent('activated', function () { if (self.authed) self.refresh().catch(function () {}); });
+        this.syncTelegramTheme();
+        if (tg.BackButton) tg.BackButton.onClick(function () { if (self.picker.open) self.closePicker(); else if (self.view === 'config') self.closeConfig(); else self.closeSettings(); });
+        this.$watch('view', function () { self.syncTelegramBack(); });
+        this.$watch('picker.open', function () { self.syncTelegramBack(); });
+        await this.check('');
+      } else if (this.key) await this.check(this.key);
+    },
+    syncTelegramBack() {
+      if (!telegram || !telegram.BackButton) return;
+      if (this.view !== 'chat' || this.picker.open) telegram.BackButton.show(); else telegram.BackButton.hide();
+    },
+    syncTelegramTheme() {
+      if (!telegram) return;
+      var color = this.theme === 'dark' ? '#070a16' : '#eceef8';
+      try { telegram.setHeaderColor(color); telegram.setBackgroundColor(color); if (telegram.isVersionAtLeast('7.10')) telegram.setBottomBarColor(color); } catch (error) {}
+    },
+    async miniSession(renew) {
+      var headers = renew && this.miniToken ? { authorization: 'Bearer ' + this.miniToken } : { 'x-telegram-init-data': telegram.initData };
+      var response = await fetch('/web/session', { method: 'POST', headers: headers });
+      if (!response.ok) throw new Error('Telegram 身份已失效或不在白名单里，请关闭小窗后重新打开');
+      var data = await response.json();
+      this.miniToken = data.token;
+      this.miniExpires = data.expiresAt;
     },
     async api(path, options) {
       var opts = options || {};
-      var headers = { 'x-web-key': this.key };
+      if (this.miniApp && (!this.miniToken || this.miniExpires - Date.now() < 3600000)) {
+        try { await this.miniSession(Boolean(this.miniToken)); } catch (error) {
+          try { await this.miniSession(false); } catch (failed) { this.authed = false; this.loginError = failed.message; throw failed; }
+        }
+      }
+      var headers = this.miniApp ? { authorization: 'Bearer ' + this.miniToken } : { 'x-web-key': this.key };
       if (opts.body) headers['content-type'] = 'application/json';
       var response = await fetch(path, { method: opts.method || 'GET', headers: headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
-      if (response.status === 401) { this.authed = false; throw new Error('钥匙不对'); }
+      if (response.status === 401 && this.miniApp) {
+        try {
+          await this.miniSession(false);
+          headers.authorization = 'Bearer ' + this.miniToken;
+          response = await fetch(path, { method: opts.method || 'GET', headers: headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+        } catch (error) { this.authed = false; this.loginError = error.message; throw error; }
+      }
+      if (response.status === 401) { this.authed = false; this.loginError = this.miniApp ? '请关闭小窗后重新打开，或检查 Telegram 白名单' : '钥匙不对'; throw new Error(this.loginError); }
       if (!response.ok) {
         var problem = await response.json().catch(function () { return {}; });
         throw new Error(problem.error || '出错了（' + response.status + '）');
@@ -520,7 +601,7 @@ function resident() {
         ]);
         if (!ready) throw new Error('聊天界面没加载出来，刷新一下试试');
         this.authed = true;
-        writeKey(key);
+        if (!this.miniApp) writeKey(key);
         this.loadPersona().catch(function () {});
         this.loadModel().catch(function () {});
         this.$nextTick(() => this.mount(lines));
@@ -537,6 +618,9 @@ function resident() {
     logout() {
       writeKey('');
       this.key = '';
+      this.miniToken = '';
+      this.miniExpires = 0;
+      if (this.miniApp && telegram) telegram.close();
       this.keyInput = '';
       this.authed = false;
       this.loaded = false;
@@ -551,6 +635,18 @@ function resident() {
     },
 
     // ---- chat (deep-chat) ----
+    activityHtml(line) {
+      var activity = line.activity || [];
+      var thoughts = activity.filter(function (item) { return item.type === 'reasoning' && item.text; });
+      var tools = activity.filter(function (item) { return item.type === 'tool'; });
+      var html = '';
+      if (thoughts.length) html += '<details class="activity" data-activity="' + esc(line.id) + ':thinking"><summary>' + (line.pending ? '正在想…' : '想了一下') + '</summary><div class="activity-body text">' + thoughts.map(function (item) { return esc(item.text); }).join('\n\n') + '</div></details>';
+      if (tools.length) html += '<details class="activity" data-activity="' + esc(line.id) + ':tools"><summary>忙活了 ' + tools.length + ' 回' + (line.pending ? ' · 还在继续' : '') + '</summary><div class="activity-body">' + tools.map(function (item, index) {
+        var state = { 'output-available': '完成', 'output-error': '出错了', 'output-denied': '未执行', 'input-streaming': '准备中' }[item.state] || '调用中';
+        return '<div class="tool-entry"><strong>' + (index + 1) + '. ' + esc(item.name) + '</strong><span class="tool-state">' + esc(state) + '</span><div>参数</div><pre>' + esc(item.input || '（无）') + '</pre>' + (item.output !== undefined ? '<div>结果</div><pre>' + esc(item.output) + '</pre>' : '') + '</div>';
+      }).join('') + '</div></details>';
+      return html;
+    },
     toMessages(line) {
       lineText[line.id] = line.text;
       if (line.kind === 'letter') {
@@ -558,9 +654,10 @@ function resident() {
       }
       var parts = bubbles(line);
       var self = this;
+      var activity = this.activityHtml(line);
       return parts.map(function (text, index) {
         var last = index === parts.length - 1;
-        return { role: line.role === 'user' ? 'user' : 'ai', html: '<div class="text">' + esc(text) + '</div>' + (last ? self.metaHtml(line) : '') };
+        return { role: line.role === 'user' ? 'user' : 'ai', html: '<div data-row="' + esc(line.id) + '" class="' + (!text ? 'activity-only' : '') + '">' + (index === 0 ? activity : '') + (text ? '<div class="text">' + esc(text) + '</div>' : '') + (last ? self.metaHtml(line) : '') + '</div>' };
       });
     },
     metaHtml(line) {
@@ -591,11 +688,17 @@ function resident() {
       el.errorMessages = { displayServiceErrorMessages: true };
       el.scrollButton = true;
       el.htmlClassUtilities = { pin: { events: { click: function (event) { self.pinFrom(event); } } } };
-      el.connect = { handler: function (body, signals) { self.say(body, signals); } };
+      el.connect = { stream: true, handler: function (body, signals) { self.say(body, signals); } };
       shown = {};
+      fingerprints = {};
       typed = [];
       var history = [];
-      lines.forEach(function (line) { shown[line.id] = true; history = history.concat(self.toMessages(line)); });
+      lines.forEach(function (line) {
+        shown[line.id] = true;
+        fingerprints[line.id] = JSON.stringify(line);
+        var messages = self.toMessages(line);
+        history = history.concat(messages);
+      });
       el.history = history;
       serverIds = lines.map(function (line) { return line.id; });
       this.lineCount = lines.length;
@@ -608,44 +711,60 @@ function resident() {
       var ids = {};
       lines.forEach(function (line) { ids[line.id] = true; });
       var folded = serverIds.some(function (id) { return !ids[id]; });
-      return { folded: folded, fresh: lines.filter(function (line) { return !shown[line.id]; }) };
+      return { folded: folded, fresh: lines.filter(function (line) { return !shown[line.id]; }), changed: lines.filter(function (line) { return shown[line.id] && fingerprints[line.id] !== JSON.stringify(line); }) };
     },
     async say(body, signals) {
       var list = (body && body.messages) || [];
       var text = ((list[list.length - 1] || {}).text || '').trim();
-      if (!text) { await signals.onResponse({ error: '空的' }); return; }
+      if (!text) { await signals.onResponse({ error: '空的' }); signals.onClose(); return; }
       this.sending = true;
       typed.push(text);
       var self = this;
+      var finished = false;
+      var timer = null;
+      var inFlight = null;
+      var previous = '';
+      var known = serverIds.slice();
+      var lines = null;
+      signals.onOpen();
+      // Stop viewing the stream without pretending to cancel the server's admitted turn.
+      var stopped = false;
+      signals.stopClicked.listener = function () { stopped = true; self.notify('回复仍在后台继续，稍后会同步回来'); };
+      async function progress() {
+        if (finished || stopped) return;
+        try {
+          var data = (await self.api('/web/messages')).data || [];
+          if (finished || stopped) return;
+          var own = data.findLastIndex(function (line) { return line.role === 'user' && line.via === 'web' && line.text.trim() === text && known.indexOf(line.id) < 0; });
+          if (own >= 0) {
+            var nextUser = data.findIndex(function (line, index) { return index > own && line.role === 'user'; });
+            var reply = data.slice(own + 1, nextUser < 0 ? data.length : nextUser).filter(function (line) { return line.role === 'assistant' && line.kind === 'chat' && line.via === 'web'; });
+            var html = reply.map(function (line) { return self.toMessages(line).map(function (message) { return message.html; }).join(''); }).join('');
+            if (html && html !== previous) {
+              previous = html;
+              var opens = chat && chat.shadowRoot ? Array.from(chat.shadowRoot.querySelectorAll('details[data-activity][open]')).map(function (el) { return el.getAttribute('data-activity'); }) : [];
+              await signals.onResponse({ html: html, overwrite: true });
+              if (chat && chat.shadowRoot) chat.shadowRoot.querySelectorAll('details[data-activity]').forEach(function (el) { if (opens.indexOf(el.getAttribute('data-activity')) >= 0) el.open = true; });
+            }
+          }
+        } catch (error) { /* The final request reports errors; a missed poll is harmless. */ }
+        if (!finished && !stopped) timer = setTimeout(function () { inFlight = progress(); }, 900);
+      }
       try {
-        var result = await this.api('/web/say', { method: 'POST', body: { text: text } });
-        var lines = (await this.api('/web/messages')).data || [];
-        var change = this.diff(lines);
-        var replies = [];
-        var own = [];
-        var reordered = false;
-        change.fresh.forEach(function (line) {
-          shown[line.id] = true;
-          if (self.takeTyped(line)) { own.push(line); return; }
-          // Someone else's line (say, from Telegram) landed before this one: deep-chat would show it after.
-          if (!own.length) reordered = true;
-          replies = replies.concat(self.toMessages(line));
-        });
-        serverIds = lines.map(function (line) { return line.id; });
-        this.lineCount = lines.length;
-        if (!replies.some(function (m) { return m.role === 'ai'; })) {
-          replies.push({ error: result.status === 'completed' ? '它这次没说话' : '这句没回出来（' + result.status + '），再发一次试试' });
-        }
-        await signals.onResponse(replies);
-        // After the reply: deep-chat cannot update a message while its typing bubble is showing.
-        if (change.folded || (reordered && own.length)) this.mount(lines);
-        else own.forEach(function (line) { self.decorateOwn(line); });
-        this.loadModel().catch(function () {});
+        var request = this.api('/web/say', { method: 'POST', body: { text: text } });
+        timer = setTimeout(function () { inFlight = progress(); }, 500);
+        var result = await request;
+        if (result.status !== 'completed') await signals.onResponse({ error: '这句没回出来（' + result.status + '），再发一次试试' });
       } catch (error) {
-        // The line stays in typed: if the server did get it, polling dresses it up instead of showing it twice.
         await signals.onResponse({ error: error.message });
       } finally {
+        finished = true;
+        clearTimeout(timer);
+        if (inFlight) await inFlight;
+        signals.onClose();
         this.sending = false;
+        try { lines = (await this.api('/web/messages')).data || []; this.rebuild(lines); } catch (error) { this.notify(error.message); }
+        this.loadModel().catch(function () {});
       }
     },
     takeTyped(line) {
@@ -667,6 +786,25 @@ function resident() {
         }
       }
     },
+    rebuild(lines) {
+      var root = chat && chat.shadowRoot;
+      var input = root && root.querySelector('#text-input');
+      var draft = input ? input.textContent : '';
+      var opens = root ? Array.from(root.querySelectorAll('details[data-activity][open]')).map(function (el) { return el.getAttribute('data-activity'); }) : [];
+      var scroller = root && root.querySelector('#messages');
+      var top = scroller ? scroller.scrollTop : 0;
+      var nearBottom = !scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
+      this.mount(lines);
+      requestAnimationFrame(function () {
+        var next = chat && chat.shadowRoot;
+        if (!next) return;
+        var field = next.querySelector('#text-input');
+        if (field && draft) field.textContent = draft;
+        next.querySelectorAll('details[data-activity]').forEach(function (el) { if (opens.indexOf(el.getAttribute('data-activity')) >= 0) el.open = true; });
+        var scroll = next.querySelector('#messages');
+        if (scroll) scroll.scrollTop = nearBottom ? scroll.scrollHeight : top;
+      });
+    },
     poll() {
       var self = this;
       clearTimeout(this.timer);
@@ -680,10 +818,11 @@ function resident() {
       var lines = (await this.api('/web/messages')).data || [];
       if (this.sending) return;
       var change = this.diff(lines);
-      if (change.folded) { this.mount(lines); return; }
+      if (change.folded || change.changed.length) { this.rebuild(lines); return; }
       var self = this;
       change.fresh.forEach(function (line) {
         shown[line.id] = true;
+        fingerprints[line.id] = JSON.stringify(line);
         if (self.takeTyped(line)) { self.decorateOwn(line); return; }
         self.toMessages(line).forEach(function (message) { chat.addMessage(message); });
       });
@@ -962,6 +1101,7 @@ function resident() {
       this.theme = this.theme === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = this.theme;
       try { localStorage.setItem('resident.theme', this.theme); } catch (e) {}
+      this.syncTelegramTheme();
     },
     notify(message) {
       var self = this;

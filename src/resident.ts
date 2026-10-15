@@ -1,9 +1,12 @@
 // The resident: one Think agent in one Durable Object. Telegram and the web page
 // are two doors into the same conversation.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   Think,
   type ChatOptions,
+  type ChunkContext,
+  type ToolCallResultContext,
   type ChatResponseResult,
   type MessageMetadataCallback,
   type SessionMessage,
@@ -40,6 +43,7 @@ import { DEFAULT_COMPRESS_MODEL, type Compressor } from "./web/compress";
 import { readerFor, webFetchTool, webFetchVia, type Page, type PageCache } from "./web/fetch";
 import { searchEngines, searchSource } from "./web/search";
 import { MEMORY_HEADER, aeliosModel } from "./via-aelios";
+import { activityOf, WebDraft, type Activity } from "./web/history";
 
 // Used until a model is picked on the web page. Free on the Workers Free plan.
 const DEFAULT_MODEL = "@cf/zai-org/glm-4.7-flash";
@@ -93,6 +97,8 @@ export type WebLine = {
   text: string;
   at: number | null;
   via: "telegram" | "web" | "checkin" | null;
+  activity?: Activity[];
+  pending?: boolean;
 };
 
 /** Token use of the latest model call. Input includes the cached part. */
@@ -164,6 +170,26 @@ export class Resident extends Think<Env> {
 
   // When each reply started, for the web page (stored rows carry no time of their own).
   override messageMetadata: MessageMetadataCallback = ({ part }) => (part.type === "start" ? { at: Date.now() } : undefined);
+
+  // Live activity is a web-only projection; the SDK remains the owner of the transcript.
+  #drafts = new Map<string, WebDraft>();
+  #draftActive: (() => boolean) | null = null;
+
+  override onChunk({ chunk }: ChunkContext): void {
+    const id = this.activeTurn?.requestId;
+    if (id) this.#drafts.get(id)?.chunk(chunk as { type: string; [key: string]: unknown });
+  }
+
+  override afterToolCall(ctx: ToolCallResultContext): void {
+    const draft = ctx.requestId ? this.#drafts.get(ctx.requestId) : undefined;
+    draft?.chunk({
+      type: ctx.success ? "tool-result" : "tool-error",
+      toolCallId: ctx.toolCallId,
+      toolName: ctx.toolName,
+      input: ctx.input,
+      ...(ctx.success ? { output: ctx.output } : { error: String(ctx.error) })
+    });
+  }
 
   get tz(): string {
     return this.cfg.TIME_ZONE?.trim() || "Asia/Singapore";
@@ -361,6 +387,16 @@ export class Resident extends Think<Env> {
   }
 
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
+    // A failed turn can finish before an assistant row exists, so no response hook is guaranteed.
+    this.#drafts.clear();
+    this.#draftActive = null;
+    if (ctx.requestId && !this.#letterPromptId) {
+      const via = ctx.messenger ? "telegram" : ctx.trigger === "scheduled" || ctx.trigger === "submission" ? "checkin" : "web";
+      this.#drafts.set(ctx.requestId, new WebDraft(`live_${ctx.requestId}`, Date.now(), via));
+      // activeTurn is async-context-local; a separate history RPC must check it inside the captured turn.
+      const withinTurn = AsyncLocalStorage.snapshot();
+      this.#draftActive = () => withinTurn(() => this.activeTurn?.requestId === ctx.requestId);
+    }
     const thread = ctx.messenger?.thread;
     if (thread?.isDirectMessage && (await this.ctx.storage.get("tg_thread")) !== thread.id) {
       await this.ctx.storage.put("tg_thread", thread.id);
@@ -532,6 +568,8 @@ export class Resident extends Think<Env> {
   }
 
   override async onChatResponse(result: ChatResponseResult): Promise<void> {
+    if (result.requestId) this.#drafts.delete(result.requestId);
+    if (!this.#drafts.size) this.#draftActive = null;
     const before = this.userMessageBefore(result.message.id);
     // The letter turn: letterTurn() takes the answer and removes both messages.
     if (this.#letterPromptId && before?.id === this.#letterPromptId) return;
@@ -654,9 +692,27 @@ export class Resident extends Think<Env> {
         lines.push({ id: message.id, role: "user", kind: "chat", text: [said, ...Array(pictures).fill("[图片]")].filter(Boolean).join("\n"), at, via });
         continue;
       }
-      if (message.role !== "assistant" || !text) continue;
+      if (message.role !== "assistant") continue;
+      const activity = activityOf(message.parts);
+      if (!text && !activity.length) continue;
       if (via === "checkin" && text === SKIP) continue;
-      lines.push({ id: message.id, role: "assistant", kind: "chat", text, at, via });
+      lines.push({ id: message.id, role: "assistant", kind: "chat", text, at, via, ...(activity.length ? { activity } : {}) });
+    }
+    // Only include a running draft when the SDK has not already exposed its assistant row.
+    for (const [requestId, draft] of this.#drafts) {
+      if (!this.#draftActive?.()) { this.#drafts.delete(requestId); continue; }
+      if (draft.via === "checkin") continue;
+      const finalUser = lines.findLastIndex((line) => line.role === "user");
+      const partial = lines.slice(finalUser + 1).find((line) => line.role === "assistant" && line.kind === "chat");
+      const activity = activityOf(draft.parts);
+      const text = textOf({ parts: draft.parts });
+      if (partial) {
+        partial.pending = true;
+        if (activity.length) partial.activity = activity;
+        if (text) partial.text = text;
+      } else if (text || activity.length) {
+        lines.push({ id: draft.id, role: "assistant", kind: "chat", text, at: draft.at, via: draft.via, activity, pending: true });
+      }
     }
     return lines;
   }

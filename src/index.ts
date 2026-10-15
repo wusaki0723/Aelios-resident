@@ -1,11 +1,14 @@
 // The Worker in front of the resident:
 //   POST /messengers/telegram/webhook   Telegram → secret check, allowlist, slash commands → the resident
-//   GET  /tg/setup?secret=…             points the bot's webhook here (open once after deploy)
+//   GET  /tg/setup?secret=…             points the bot's webhook here (open once after deploy); opened over https,
+//                                       also makes the bot's menu button open the web page as a Mini App
 //   /web/*                              the web page's API (same conversation as Telegram, the model, the persona
-//                                       and the settings), behind WEB_KEY
+//                                       and the settings), behind WEB_KEY, or inside Telegram behind signed
+//                                       initData / a Mini App session and TG_ALLOWED (mini-app.ts)
 //   everything else                     the web page itself (public/)
 
 import { getAgentByName } from "agents";
+import { callerAllowed, issueSession, miniAppCaller, triesMiniApp } from "./mini-app";
 import { commandOf, isAllowed, sendBubbles, setWebhook, timingSafeEqual, type TelegramUpdate } from "./telegram";
 
 export { ThinkMessengerStateAgent } from "@cloudflare/think/messengers";
@@ -64,7 +67,11 @@ async function handleSetup(env: Env, url: URL): Promise<Response> {
   const secret = env.TG_WEBHOOK_SECRET?.trim();
   if (!secret || !env.TG_BOT_TOKEN) return new Response("set TG_BOT_TOKEN and TG_WEBHOOK_SECRET first", { status: 400 });
   if (!timingSafeEqual(url.searchParams.get("secret") ?? "", secret)) return new Response("unauthorized", { status: 401 });
-  return Response.json(await setWebhook(telegram(env), `${url.origin}${WEBHOOK_PATH}`, secret));
+  // Telegram only opens Mini Apps from https; over http (local tests) the menu button is left alone.
+  const https = url.protocol === "https:";
+  const result = await setWebhook(telegram(env), `${url.origin}${WEBHOOK_PATH}`, secret, https ? { miniAppUrl: `${url.origin}/` } : {});
+  if (!https) result.setChatMenuButton = { skipped: "the Mini App needs https; open /tg/setup on the https address" };
+  return Response.json(result);
 }
 
 /** The web door is open only with WEB_KEY, sent by the page as the x-web-key header. */
@@ -73,13 +80,45 @@ function webAllowed(env: Env, request: Request): boolean {
   return Boolean(key && timingSafeEqual(request.headers.get("x-web-key") ?? "", key));
 }
 
+type WebCaller = { via: "web" } | { via: "telegram"; caller: NonNullable<Awaited<ReturnType<typeof miniAppCaller>>> };
+
+/**
+ * WEB_KEY, or else the Mini App's signed initData or session token from someone in TG_ALLOWED (checked on every
+ * request, so taking someone off the list shuts them out at once). Null when neither.
+ */
+async function webCaller(env: Env, request: Request): Promise<WebCaller | null> {
+  if (webAllowed(env, request)) return { via: "web" };
+  if (!triesMiniApp(request)) return null;
+  // The signature is checked before the resident is woken up.
+  const caller = await miniAppCaller(request, env.TG_BOT_TOKEN);
+  if (!caller) return null;
+  const agent = await getAgentByName(env.RESIDENT, AGENT_NAME);
+  if (!callerAllowed(await agent.telegramAllowed(), caller)) {
+    console.log("web: Mini App user not in TG_ALLOWED", { id: caller.user.id, username: caller.user.username });
+    return null;
+  }
+  return { via: "telegram", caller };
+}
+
 async function handleWeb(request: Request, env: Env, url: URL): Promise<Response> {
-  if (!webAllowed(env, request)) return new Response("unauthorized", { status: 401 });
+  const who = await webCaller(env, request);
+  if (!who) return new Response("unauthorized", { status: 401 });
+  if (url.pathname === "/web/session") {
+    // Only the Mini App gets sessions; WEB_KEY is used as it is.
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    if (who.via !== "telegram") return new Response("the Mini App way in only", { status: 400 });
+    const { user, auth } = who.caller;
+    const session = await issueSession(env.TG_BOT_TOKEN ?? "", user, auth);
+    return Response.json(
+      { ...session, user: { id: user.id, username: user.username ?? null, first_name: user.first_name ?? null } },
+      { headers: { "cache-control": "no-store" } }
+    );
+  }
   const agent = await getAgentByName(env.RESIDENT, AGENT_NAME);
   const body = request.method === "POST" ? ((await request.json().catch(() => ({}))) as { text?: string; key?: string }) : {};
   switch (`${request.method} ${url.pathname}`) {
     case "GET /web/check":
-      return Response.json({ ok: true, aelios: await agent.hasMemory() });
+      return Response.json({ ok: true, aelios: await agent.hasMemory(), via: who.via });
     case "GET /web/messages":
       return Response.json({ data: await agent.webHistory() });
     case "POST /web/say":

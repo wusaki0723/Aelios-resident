@@ -14,7 +14,7 @@ Telegram ──▶ Worker（验 secret、白名单、斜杠命令）──┐
 ## 能做什么
 
 - **Telegram**：私聊才回，不在 `TG_ALLOWED` 里的人一个字都不回。连发几条会等 `DEBOUNCE_SECONDS` 秒并成一轮。回复按空行拆成几条消息，写完一段发一段，中间显示「正在输入」。你每条消息前面带上当地时间（`TIME_ZONE`），模型知道现在几点。Telegram 重发同一条消息不会回两次。发图片（照片，或者当文件发的图）模型看得到：Think 本来只把附件写成一行文字，住户收到后从 Telegram 下载下来放进你那条消息（`src/pictures.ts`），配的文字照常；超过 5 MB 或下载失败的还是一行文字。超过 32 KB 的图按 Think 默认的做法，过几轮会从对话里拿掉、留一行标记，免得每轮都重读；网页上显示成「[图片]」。网页门暂时不能发图。
-- **网页门**：打开 Worker 的网址，填 `WEB_KEY` 进门。聊天界面用的是现成的 [deep-chat](https://github.com/OvidijusParsiunas/deep-chat)（MIT），星空配色，夜间/白天可切，手机上也好按。跟 Telegram 是同一段对话：两边说的话两边都看得到（网页每 5 秒刷新一次）；在网页上说的话只在网页上回。每条下面有时间、从哪边来的、心形按钮（存进 Aelios 的「珍贵」）。交接信折叠显示在它收起的位置。
+- **网页门**：打开 Worker 的网址，填 `WEB_KEY` 进门。聊天界面用的是现成的 [deep-chat](https://github.com/OvidijusParsiunas/deep-chat)（MIT），星空配色，夜间/白天可切，手机上也好按。跟 Telegram 是同一段对话：两边说的话两边都看得到（网页每 5 秒刷新一次）；在网页上说的话只在网页上回。每条下面有时间、从哪边来的、心形按钮（存进 Aelios 的「珍贵」）。交接信折叠显示在它收起的位置。模型返回的思考默认收在「想了一下」里，工具调用默认收在「忙活了 X 回」里，点开看工具名、参数和结果；X 按工具调用次数计，同一个调用的返回不重复计数。模型未返回思考时不凭空生成。网页发消息等待回复时约每 0.9 秒同步一次进行中的思考、工具和回复文字；Telegram 那边的进度随网页原有的 5 秒刷新同步。
 - **模型**：点网页门左上角的模型名换。弹出来的是一个搜索框，不是几千项的下拉菜单：上面是正在用的、最近用过的、常用的（Claude 几个和默认的 GLM），往下是 Cloudflare 模型目录里全部文字模型（110 个，按厂商分组），输入 `opus`、`kimi`、`qwen` 就筛出来；目录里没有的，直接填完整 id 也能用。紫点是 Cloudflare 自己跑的（Workers AI），橙点走 AI Gateway 的额度。换之前先让它带着一句人设和缓存标记说一个字试试，调不通（写错、档位不含、没额度）就不换，当场告诉你原因。没选时用免费档能用的 `@cf/zai-org/glm-4.7-flash`。接了 Aelios 时，选的模型都从 Aelios 过（见下面「Aelios 长期记忆」），用 Aelios 那边配好的供应商和 key，选单上标「从 Aelios 过」；Aelios 说这个模型不在住户那个身份的主模型里（从它那儿过也不记）时，也不换。Claude 填 `anthropic/claude-opus-5.5` 这种（Cloudflare 的写法用点号），走 Anthropic 的 Messages 接口，每轮都带缓存标记，人设、规矩、开机包和之前的聊天下一轮从缓存读，缓存默认留 1 小时（`CACHE_TTL`）；`/status` 和人设页会显示上一次调用的缓存读了多少。以前填在 `MODEL` 变量里的模型，第一次用时自动搬过来，之后改 `MODEL` 不再起作用。
 - **自己的 key、自己的供应商**：接了 Aelios 就在 Aelios 后台配，住户这边不用管。下面说的是没接 Aelios 的时候。Claude（`anthropic/…`）默认花 Cloudflare 的统一计费额度。想用自己的 Anthropic key，不用改任何东西：在住户用的那个 AI Gateway（`AI_GATEWAY_ID`，没填就是 `default`）→ Provider Keys 里存一把 Anthropic 的 key，别名留 `default`，之后 `anthropic/…` 就用这把，不再走统一计费（Cloudflare 的规矩：请求里没带厂商 key 时先用 Gateway 里别名 `default` 的那把，没有才走统一计费）。要接中转、OpenRouter、Nous 这类别家，在设置页填那家的地址（`CUSTOM_BASE_URL`，写到 `/v1` 为止）和 key（`CUSTOM_API_KEY`），模型填 `custom/` 加那家自己的模型名，比如 `custom/anthropic/claude-sonnet-5.5`。默认按 OpenAI 的 chat completions 格式调；那家说的是 Anthropic 的 Messages 格式（Anthropic 自己 `https://api.anthropic.com/v1`，或者支持 Messages 的中转）就把格式（`CUSTOM_FORMAT`）选 `anthropic`，这样缓存标记照带、之前几轮的思考块照样拿掉（`src/custom.ts`）。这条路从 Worker 直接打过去，不经过 AI Gateway，所以 Gateway 的日志里看不到。AI Gateway 后台建的「自定义供应商」（`custom-xxx/…`）Cloudflare 的模型目录不认，住户用不了，直接填那家的地址就行。网页选单里这种模型的圆点是空心的。
 - **设置页**：点右上角的齿轮。Aelios 的地址和 key、谁能在 Telegram 上跟它说话、时区、主动找你的时间、交接信和缓存、自己的供应商、搜网和读网页，都在这里改，下一句就生效，不用再去 Cloudflare 后台填变量。这里存的优先；空着的用 Cloudflare 里同名的变量（以前填的照样有效），那边也没有就用默认。key 只能填、不能看，页面上只显示「已填」。主动找你的时间和时区存的时候当场排一次，排不上就不存。只有 `TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`WEB_KEY` 还得在 Cloudflare 里填：没有它们 Telegram 接不上、网页门进不去。锁上网页门的按钮在这页最下面。
@@ -50,8 +50,8 @@ Telegram ──▶ Worker（验 secret、白名单、斜杠命令）──┐
 3. **填三个 Secret**（Worker → Settings → Variables and Secrets）。别的都在网页门的设置页里填，不用来这儿：
    - `TG_BOT_TOKEN`：第 1 步的 token
    - `TG_WEBHOOK_SECRET`：自己编一串长的（字母、数字、`_`、`-`）
-   - `WEB_KEY`：网页门的钥匙，自己编一串长的；不填网页门就一直关着。拿到它就能看全部对话、改模型、人设和设置，别截图别外发；怀疑漏了就在 Cloudflare 里换一个，网页门重新填一次
-4. **接上 Telegram**：浏览器打开一次 `https://aelios-resident.<你的子域>.workers.dev/tg/setup?secret=<TG_WEBHOOK_SECRET>`，两个 `"ok":true` 就接好了（顺便把三个命令登记到 bot 的菜单里）。
+   - `WEB_KEY`：普通浏览器的网页门钥匙，自己编一串长的；不填时普通网页登录关闭，Telegram Mini App 仍可凭签名身份和白名单进入。拿到它就能看全部对话、改模型、人设和设置，别截图别外发；怀疑漏了就在 Cloudflare 里换一个，网页门重新填一次
+4. **接上 Telegram**：浏览器打开一次 `https://aelios-resident.<你的子域>.workers.dev/tg/setup?secret=<TG_WEBHOOK_SECRET>`，`setWebhook`、`setMyCommands` 和 `setChatMenuButton` 都返回 `"ok":true` 就接好了（顺便把三个命令登记到 bot 的菜单里，并把 bot 左下角的菜单按钮设成「打开网页」，在 Telegram 里点开就是网页门，见下面「Telegram Mini App」）。
 5. 打开 `https://aelios-resident.<你的子域>.workers.dev/`，填 `WEB_KEY` 进网页门。点右上角的齿轮进设置页，填：
    - 谁能跟它说话：你的 Telegram 用户名，比如 `@your_name`（也可以填 chat id，逗号隔开）
    - Aelios 的地址（比如 `https://companion-memory-proxy.xxx.workers.dev`）和 key：跟你 Aelios 那边 `CHATBOX_API_KEY`、`IM_API_KEY`、`MEMORY_MCP_API_KEY` 任意一把同一个值。三把都读写 `default` 空间；想用别的空间只能用 `CHATBOX_API_KEY`
@@ -59,6 +59,17 @@ Telegram ──▶ Worker（验 secret、白名单、斜杠命令）──┐
 
    再点左上角的模型名选模型，点铅笔把人设贴进去、保存。
 6. 给 bot 发条消息。
+
+## Telegram Mini App
+
+部署这个版本后，从正式 https 域名重新打开一次 `/tg/setup?secret=<TG_WEBHOOK_SECRET>`，即可更新 bot 左下角的「打开网页」按钮。也可以在 BotFather 的 Menu Button 设置里填同一个 https 根网址。此操作不需要新建 bot。
+
+在 Telegram 里点 bot 的菜单按钮，网页门直接在 Telegram 里打开，不用填 `WEB_KEY`；Mini App 里也拿不到 `WEB_KEY`。它凭 Telegram 用 bot token 签过名的 `initData` 进门（`src/mini-app.ts`）：Worker 按[官方做法](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app)验 HMAC 签名，`auth_date` 超过 24 小时的不认，用户只从签过名的字符串里读，不信 `initDataUnsafe`。验过以后换一个短期会话（12 小时，页面开着时自己续，从打开那一刻起最多续 7 天，之后要重新打开 Mini App），所以开着很久也不会掉线。
+
+- 每次请求都按当时生效的 `TG_ALLOWED` 再查一遍（用户 id 或 @用户名）：把人从名单里拿掉，正开着的 Mini App 下一次请求就进不来。
+- 会话用从 bot token 派生的密钥签名，换掉 `TG_BOT_TOKEN` 所有会话立刻作废，不存任何状态。
+- 名单里的人在 Mini App 里能做的和网页门一样（聊天、换模型、人设、设置）。
+- `/tg/setup` 只有用 https 网址打开时才设菜单按钮（Telegram 只开 https 的 Mini App），打开的就是那个网址的根路径；换了自定义域名就从新域名再打开一次 `/tg/setup`。本地 http 测试时跳过这一步。
 
 ## 设置
 
@@ -94,12 +105,12 @@ Telegram ──▶ Worker（验 secret、白名单、斜杠命令）──┐
 
 ## 还没做
 
-- 看图、听语音。
-- 网页门逐字显示（现在是写完一整条再出现）。
+- 听语音、网页门发图。
+- 真正逐 token 推送（现在等待回复时短轮询同步文字和思考、工具进度）。
 
 ## 网页用到的现成东西
 
-都放在 `public/vendor/`，网页不用连外面的 CDN：
+聊天组件都放在 `public/vendor/`，普通网页登录不用连外面的 CDN。仅从 Telegram Mini App 打开时加载官方 `https://telegram.org/js/telegram-web-app.js`，用来取得签名身份、适配窗口高度、安全区、返回按钮和主题：
 
 - [deep-chat](https://github.com/OvidijusParsiunas/deep-chat) 2.5.1，聊天界面，MIT（`deep-chat-LICENSE.txt`）
 - [Alpine.js](https://github.com/alpinejs/alpine) 3.14.9，换模型和人设页，MIT（`alpine-LICENSE.txt`）
@@ -117,7 +128,7 @@ NO_PROXY=127.0.0.1 npx wrangler dev --config wrangler.test.jsonc --port 8787 &
 NO_PROXY=127.0.0.1 node test/run.mjs main
 ```
 
-`wrangler.test.jsonc` 用脚本模型（`FAKE_MODEL=true`），不需要登录 Cloudflare，也不花钱。定时、空闲交接信、没接 Aelios 时自己的供应商要另外起一次，见 `test/run.mjs` 开头的说明。读网页的测试 `node test/web.mjs`、`node test/claude-run.mjs`、交接信收哪些聊天的 `node test/fold.mjs` 和从 Aelios 过的 `node test/via-aelios.mjs` 不用起 Worker。
+`wrangler.test.jsonc` 用脚本模型（`FAKE_MODEL=true`），不需要登录 Cloudflare，也不花钱。定时、空闲交接信、没接 Aelios 时自己的供应商要另外起一次，见 `test/run.mjs` 开头的说明。读网页的测试 `node test/web.mjs`、`node test/claude-run.mjs`、Mini App 进门的 `node test/history.mjs` 测思考、工具投影与计数，`node test/history-worker.mjs` 在本地 Worker 上测实时思考与工具记录；`node test/mini-app.mjs`（加 `worker` 再连本地 Worker 测一遍）、交接信收哪些聊天的 `node test/fold.mjs` 和从 Aelios 过的 `node test/via-aelios.mjs` 不用起 Worker。
 
 ## 许可证
 

@@ -47,6 +47,7 @@ const server = http.createServer(async (req, res) => {
       case "sendChatAction":
       case "setWebhook":
       case "setMyCommands":
+      case "setChatMenuButton":
         return reply({ ok: true, result: true });
       default:
         // e.g. sendRichMessage: an older Bot API, so the adapter falls back to sendMessage.
