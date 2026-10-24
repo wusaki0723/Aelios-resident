@@ -124,6 +124,48 @@ await test("the tool set is in a fixed order, capped, and every description says
   assert.deepEqual(Object.keys(shuffled.tools), keys);
 });
 
+await test("catalogs are sorted and bounded by tool count before they are cached", () => {
+  const live = [];
+  for (let i = m.MAX_MCP_CATALOG_TOOLS; i >= 0; i -= 1) {
+    live.push({ serverId: "notes", name: `t${String(i).padStart(3, "0")}`, inputSchema: { type: "object" } });
+  }
+  const errors = [];
+  const original = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  let catalog;
+  try {
+    catalog = m.catalogOf(["notes"], new Set(["notes"]), live, new Map());
+  } finally {
+    console.error = original;
+  }
+  assert.equal(catalog.length, m.MAX_MCP_CATALOG_TOOLS);
+  assert.deepEqual(catalog.map((tool) => tool.name), catalog.map((tool) => tool.name).sort((a, b) => a.localeCompare(b)));
+  assert.ok(!catalog.some((tool) => tool.name === `t${m.MAX_MCP_CATALOG_TOOLS}`));
+  assert.ok(errors.some((line) => line.includes("notes") && line.includes(String(m.MAX_MCP_CATALOG_TOOLS + 1))));
+});
+
+await test("catalogs reject oversized or unserializable schemas without exceeding the storage byte cap", () => {
+  const live = [
+    { serverId: "notes", name: "a-huge", inputSchema: { type: "object", description: "x".repeat(m.MAX_MCP_CATALOG_BYTES) } },
+    { serverId: "notes", name: "b-circular", inputSchema: null },
+    { serverId: "notes", name: "c-good", inputSchema: { type: "object", properties: { q: { type: "string" } } } }
+  ];
+  live[1].inputSchema = live[1];
+  const errors = [];
+  const original = console.error;
+  console.error = (...args) => errors.push(args.map(String).join(" "));
+  let catalog;
+  try {
+    catalog = m.catalogOf(["notes"], new Set(["notes"]), live, new Map());
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(catalog.map((tool) => tool.name), ["c-good"]);
+  assert.ok(new TextEncoder().encode(JSON.stringify(catalog)).byteLength <= m.MAX_MCP_CATALOG_BYTES);
+  assert.ok(errors.some((line) => line.includes("notes/a-huge") && line.includes("byte")));
+  assert.ok(errors.some((line) => line.includes("notes/b-circular") && line.includes("serialize")));
+});
+
 await test("a server that is not ready yet offers the tools it listed last time, so the tools stay the same", () => {
   const live = [
     { serverId: "notes", name: "search", description: "Search notes", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } },

@@ -66,7 +66,11 @@ export function keptFrom(messages: SessionMessage[], keepRecentTokens: number): 
  * The budget is asked for each time, so a change on the settings page applies to the next letter. `short` is told
  * when the whole conversation still fits in the kept part, so there was nothing to fold (the heartbeat's moment).
  */
-export function foldIntoLetter(budget: number | (() => number), write: () => Promise<string>, short?: () => void): CompactionFunction {
+export function foldIntoLetter(
+  budget: number | (() => number),
+  write: (range: { fromMessageId: string; toMessageId: string }) => Promise<string>,
+  short?: () => void
+): CompactionFunction {
   return async (messages) => {
     const keepRecentTokens = typeof budget === "function" ? budget() : budget;
     const older = messages.slice(KEEP_HEAD, keptFrom(messages, keepRecentTokens)).filter((message) => !isLetter(message));
@@ -78,8 +82,9 @@ export function foldIntoLetter(budget: number | (() => number), write: () => Pro
       short?.();
       return null;
     }
-    const letter = await write();
+    const range = { fromMessageId: older[0].id, toMessageId: older[older.length - 1].id };
+    const letter = await write(range);
     if (!letter.trim()) return null;
-    return { fromMessageId: older[0].id, toMessageId: older[older.length - 1].id, summary: letter };
+    return { ...range, summary: letter };
   };
 }

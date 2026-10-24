@@ -130,7 +130,7 @@ import { DEFAULT_COMPRESS_MODEL, type Compressor } from "./web/compress";
 import { readerFor, webFetchTool, webFetchVia, type Page, type PageCache } from "./web/fetch";
 import { SiteKeyStore } from "./web/site-keys";
 import { searchEngines, searchSource } from "./web/search";
-import { MEMORY_HEADER, aeliosModel, type Thinking } from "./via-aelios";
+import { MEMORY_HEADER, aeliosModel, onMessages, type Thinking } from "./via-aelios";
 import { effortOf } from "./thinking";
 import { activityOf, WebDraft, type Activity } from "./web/history";
 import { learnFromSearch, searched, type Searched } from "./web/learn";
@@ -214,6 +214,15 @@ export type WebLine = {
 
 /** Token use of the latest model call. Input includes the cached part. */
 export type LastUsage = { at: number; input: number; cacheRead: number; cacheWrite: number; output: number };
+
+type LetterJob = {
+  promptId: string;
+  reason: "idle" | "handoff";
+  fromMessageId: string;
+  toMessageId: string;
+  summary: string | null;
+  createdAt: number;
+};
 
 /**
  * The model as the web page edits it. An empty model means the default is in use. memoryOff: on her latest turn
@@ -303,9 +312,32 @@ export class Resident extends Think<Env> {
   #theirTurns = new Set<string>();
   #readOutside = new Set<string>();
 
+  // Kept in SQLite too, so a turn that resumes after a restart still knows what it was.
+  private markTurn(id: string, flag: "their" | "outside"): void {
+    this.sql`CREATE TABLE IF NOT EXISTS res_turn_flags (request_id TEXT NOT NULL, flag TEXT NOT NULL, created_at INTEGER NOT NULL,
+      PRIMARY KEY (request_id, flag))`;
+    this.sql`INSERT OR IGNORE INTO res_turn_flags VALUES (${id}, ${flag}, ${Date.now()})`;
+    if (flag === "their") this.#theirTurns.add(id);
+    if (flag === "outside") this.#readOutside.add(id);
+  }
+
+  private restoreTurn(id: string): void {
+    this.sql`CREATE TABLE IF NOT EXISTS res_turn_flags (request_id TEXT NOT NULL, flag TEXT NOT NULL, created_at INTEGER NOT NULL,
+      PRIMARY KEY (request_id, flag))`;
+    this.sql`DELETE FROM res_turn_flags WHERE created_at < ${Date.now() - 7 * 86400_000}`;
+    for (const row of this.sql<{ flag: string }>`SELECT flag FROM res_turn_flags WHERE request_id = ${id}`) {
+      if (row.flag === "their") this.#theirTurns.add(id);
+      if (row.flag === "outside") this.#readOutside.add(id);
+    }
+  }
+
+  private clearTurn(id: string): void {
+    this.sql`DELETE FROM res_turn_flags WHERE request_id = ${id}`;
+  }
+
   override afterToolCall(ctx: ToolCallResultContext): void {
     if (ctx.requestId && (ctx.toolName === "web_search" || ctx.toolName === "web_fetch" || ctx.toolName.startsWith("mcp_"))) {
-      this.#readOutside.add(ctx.requestId);
+      this.markTurn(ctx.requestId, "outside");
     }
     if (ctx.toolName === "web_search" && ctx.success && ctx.requestId) {
       const list = this.#searches.get(ctx.requestId) ?? [];
@@ -334,6 +366,8 @@ export class Resident extends Think<Env> {
     this.mcp.configureOAuthCallback({
       customHandler: (result) => callbackPage(result, this.mcp.listServers().find((server) => server.id === result.serverId)?.name ?? null)
     });
+    if (this.letterJob()) await this.schedule(1, "resumeLetter", {}, { idempotent: true });
+    for (const alarm of this.alarms().all()) await this.armAlarm(alarm, alarm.next);
   }
 
   get tz(): string {
@@ -667,9 +701,15 @@ export class Resident extends Think<Env> {
 
   /** Point the alarm's one schedule at its next ring. */
   private async armAlarm(alarm: Alarm, next: number): Promise<void> {
-    if (alarm.scheduleId) await this.cancelSchedule(alarm.scheduleId).catch(() => false);
-    const schedule = await this.schedule(new Date(next), "alarmRings", { id: alarm.id, at: next });
-    this.alarms().armed(alarm.id, next, schedule.id);
+    if (alarm.next !== next) this.alarms().next(alarm.id, next);
+    try {
+      const schedule = await this.schedule(new Date(next), "alarmRings", { id: alarm.id, at: next }, { idempotent: true });
+      if (alarm.scheduleId && alarm.scheduleId !== schedule.id) await this.cancelSchedule(alarm.scheduleId).catch(() => false);
+      this.alarms().armed(alarm.id, next, schedule.id);
+    } catch (error) {
+      if (alarm.next !== next) this.alarms().next(alarm.id, alarm.next);
+      throw error;
+    }
   }
 
   private async removeAlarm(id: string): Promise<boolean> {
@@ -689,8 +729,10 @@ export class Resident extends Think<Env> {
   }
 
   /**
-   * An alarm's time has come: a repeating one is set for its next time, a one-time one is gone. Then, if alarms are
-   * on and today's rings are not used up, one turn of the resident's with its note, like a check-in.
+   * An alarm's time has come: if alarms are on and today's rings are not used up, one turn of the resident's with
+   * its note, like a check-in. Then a repeating one is set for its next time, a one-time one is gone. The ring is
+   * counted under a key of its own, so a schedule that runs again after a restart neither rings twice nor uses
+   * up a second one of today's rings.
    */
   async alarmRings(payload: { id: string; at?: number }): Promise<void> {
     const store = this.alarms();
@@ -699,18 +741,33 @@ export class Resident extends Think<Env> {
     // Only the ring the alarm is set for now: a schedule left from before it was moved (and not cancelled) passes.
     if (!alarm || (payload.at === undefined ? now < alarm.next - 30_000 : payload.at !== alarm.next)) return;
     const rule = alarm.repeat ? parseRule(alarm.repeat) : null;
-    // This schedule has run: the next ring gets a schedule of its own. Counted from this ring's time, not from now:
-    // schedules keep whole seconds and can run a moment early, which would land on this same ring again.
-    if (rule && !("error" in rule)) await this.armAlarm({ ...alarm, scheduleId: "" }, nextRing(rule, alarm.anchor, Math.max(now, alarm.next), this.tz));
-    else store.remove(alarm.id);
-    if (!this.alarmsOn()) return;
-    if (!store.ring(now)) {
+    // The next ring is counted from this ring's time, not from now: schedules keep whole seconds and can run a
+    // moment early, which would land on this same ring again.
+    const advance = async () => {
+      if (rule && !("error" in rule)) await this.armAlarm(alarm, nextRing(rule, alarm.anchor, Math.max(now, alarm.next), this.tz));
+      else store.remove(alarm.id);
+    };
+    if (!this.alarmsOn()) {
+      await advance();
+      return;
+    }
+    const ringKey = `alarm_${alarm.id}_${alarm.next}`;
+    if (!store.ring(now, ringKey)) {
       console.log("alarm: today's rings are used up, this one passes", { id: alarm.id });
+      await advance();
       return;
     }
     const text = alarmNote(alarm, stamp(new Date(now), this.tz), stamp(new Date(alarm.setAt), this.tz));
-    const message = { id: `alarm_${alarm.id}_${now}`, role: "user", parts: [{ type: "text", text }], metadata: { at: now } } as UIMessage;
-    await this.submitMessages([message], { idempotencyKey: message.id }).catch((error) => console.error("alarm: note not queued", { error: String(error) }));
+    const message = { id: ringKey, role: "user", parts: [{ type: "text", text }], metadata: { at: now } } as UIMessage;
+    try {
+      await this.submitMessages([message], { submissionId: ringKey, idempotencyKey: ringKey });
+    } catch (error) {
+      if (!(await this.inspectSubmission(ringKey))) {
+        store.releaseRing(ringKey);
+        throw error;
+      }
+    }
+    await advance();
   }
 
   /** The settings page's list of the alarms it set. */
@@ -1302,6 +1359,12 @@ export class Resident extends Think<Env> {
   }
 
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
+    if (this.#theirTurns.size > 20) this.#theirTurns.clear();
+    if (this.#readOutside.size > 20) this.#readOutside.clear();
+    if (ctx.requestId) this.restoreTurn(ctx.requestId);
+    const letter = this.letterJob();
+    this.#letterPromptId = letter && this.userMessageBefore("")?.id === letter.promptId ? letter.promptId : null;
+    this.#letterReason = letter?.reason ?? "handoff";
     // A failed turn can finish before an assistant row exists, so no response hook is guaranteed.
     this.#drafts.clear();
     this.#spoke = null;
@@ -1328,12 +1391,10 @@ export class Resident extends Think<Env> {
       const proactive = ctx.trigger === "scheduled" || ctx.trigger === "submission";
       // "" is no message's id: the latest message of anyone's.
       const asked = this.userMessageBefore("")?.text ?? "";
-      if (this.#theirTurns.size > 20) this.#theirTurns.clear();
-      if (this.#readOutside.size > 20) this.#readOutside.clear();
       // Cleared as a turn starts, never during one: a turn's count of tasks cannot be reset under it.
       if (this.#turnTasks.size > 20) this.#turnTasks.clear();
       if (!proactive && !this.#letterPromptId && asked && !isNote(asked)) {
-        this.#theirTurns.add(ctx.requestId);
+        this.markTurn(ctx.requestId, "their");
         // When they last wrote, from the start of their turn: a heartbeat due while it runs sees it and passes.
         await this.ctx.storage.put("their_last_at", Date.now());
         await this.stopHeartbeats();
@@ -1423,7 +1484,7 @@ export class Resident extends Think<Env> {
       .onCompaction(
         foldIntoLetter(
           () => this.keepRecentTokens(),
-          () => this.letterTurn(),
+          (range) => this.letterTurn(range),
           () => {
             this.#short = true;
           }
@@ -1442,46 +1503,120 @@ export class Resident extends Think<Env> {
   #letterReason: "idle" | "handoff" = "handoff";
   /** The letter prompt's id while its turn runs, so onChatResponse and boot() can tell that turn apart. */
   #letterPromptId: string | null = null;
+  #letterPromise: Promise<unknown> | null = null;
+
+  /**
+   * The letter being written, in SQLite, so a restart halfway finishes it instead of losing it: the prompt's id,
+   * the turns it folds, and once the letter is there, the letter itself.
+   */
+  private letterJob(): LetterJob | null {
+    this.sql`CREATE TABLE IF NOT EXISTS res_letter_job (id INTEGER PRIMARY KEY CHECK (id = 1), prompt_id TEXT NOT NULL,
+      reason TEXT NOT NULL, from_message_id TEXT NOT NULL, to_message_id TEXT NOT NULL, summary TEXT, created_at INTEGER NOT NULL)`;
+    const [row] = this.sql<{ prompt_id: string; reason: "idle" | "handoff"; from_message_id: string; to_message_id: string; summary: string | null; created_at: number }>`
+      SELECT * FROM res_letter_job WHERE id = 1`;
+    return row
+      ? { promptId: row.prompt_id, reason: row.reason, fromMessageId: row.from_message_id, toMessageId: row.to_message_id, summary: row.summary, createdAt: row.created_at }
+      : null;
+  }
+
+  private saveLetterJob(job: LetterJob): void {
+    this.letterJob();
+    this.sql`INSERT OR REPLACE INTO res_letter_job VALUES
+      (1, ${job.promptId}, ${job.reason}, ${job.fromMessageId}, ${job.toMessageId}, ${job.summary}, ${job.createdAt})`;
+  }
+
+  private deleteLetterJob(promptId: string): void {
+    this.letterJob();
+    this.sql`DELETE FROM res_letter_job WHERE id = 1 AND prompt_id = ${promptId}`;
+  }
 
   /**
    * The handoff letter, written as one more turn of the same conversation: the request is the chat's own
    * (system prompt, tools, every earlier message, exactly as the last turn sent them) plus one prompt at the
-   * end, so all of it is read from the prompt cache. The prompt and the letter are then taken out of the
-   * conversation again, and compaction folds the older turns into the letter.
+   * end, so all of it is read from the prompt cache. finishLetter then takes the prompt and the letter out of
+   * the conversation again, and compaction folds the older turns into the letter.
    */
-  private async letterTurn(): Promise<string> {
+  private async letterTurn(range: { fromMessageId: string; toMessageId: string }): Promise<string> {
     // She came back just as the quiet time ran out: no letter now, her turn plans the next one.
     if (this.#letterReason === "idle" && this.activeTurn) return "";
+    const existing = this.letterJob();
+    if (existing) {
+      return existing.summary && existing.fromMessageId === range.fromMessageId && existing.toMessageId === range.toMessageId ? existing.summary : "";
+    }
+    const createdAt = Date.now();
     const prompt: UIMessage = {
       id: `letter_${crypto.randomUUID()}`,
       role: "user",
-      parts: [{ type: "text", text: letterPrompt(stamp(new Date(), this.tz), this.#letterReason === "idle") }]
+      parts: [{ type: "text", text: letterPrompt(stamp(new Date(createdAt), this.tz), this.#letterReason === "idle") }]
     };
+    this.saveLetterJob({ promptId: prompt.id, reason: this.#letterReason, ...range, summary: null, createdAt });
     this.#letterPromptId = prompt.id;
     let status = "error";
-    let answer: SessionMessage[] = [];
     try {
       status = (await this.saveMessages([prompt])).status;
     } finally {
       this.#letterPromptId = null;
-      // Whatever happened, the prompt and its answer leave the conversation, or every later turn would carry them.
-      answer = await this.takeOut(prompt.id).catch((error) => {
-        console.error("letter: could not take the letter turn out", { error: String(error) });
-        return [];
-      });
     }
     if (status !== "completed") throw new Error(`the letter turn ended ${status}`);
-    const letter = letterText(answer);
-    if (!letter || letter === SKIP) return "";
-    this.letters();
-    this.sql`INSERT INTO res_letters (at, text) VALUES (${Date.now()}, ${letter})`;
-    const memory = aeliosConfig(this.cfg);
-    if (memory) this.ctx.waitUntil(ingest(memory, [{ role: "assistant", content: `（交接信）${letter}` }], "aelios-resident:letter"));
-    return `[Handoff letter you wrote on ${stamp(new Date(), this.tz)}]\n${letter}`;
+    return this.letterJob()?.summary ?? "";
   }
 
-  /** Delete one message and the answer right after it. Returns the answer. */
-  private async takeOut(id: string): Promise<SessionMessage[]> {
+  private async finishLetter(job: LetterJob, status: string, messageId: string): Promise<void> {
+    const before = this.userMessageBefore(messageId);
+    if (before?.id !== job.promptId) return;
+    this.#letterPromptId = null;
+    if (status !== "completed") {
+      await this.takeOut(job.promptId);
+      this.deleteLetterJob(job.promptId);
+      return;
+    }
+    const answer = await this.answerAfter(job.promptId);
+    const letter = letterText(answer);
+    if (!letter || letter === SKIP) {
+      await this.takeOut(job.promptId);
+      this.deleteLetterJob(job.promptId);
+      return;
+    }
+    const summary = `[Handoff letter you wrote on ${stamp(new Date(job.createdAt), this.tz)}]\n${letter}`;
+    let fresh = false;
+    this.ctx.storage.transactionSync(() => {
+      this.letters();
+      // A response hook replayed after a restart finds the letter already kept.
+      fresh = !this.sql`SELECT 1 FROM res_letters WHERE at = ${job.createdAt}`.length;
+      if (fresh) this.sql`INSERT INTO res_letters (at, text) VALUES (${job.createdAt}, ${letter})`;
+      this.saveLetterJob({ ...job, summary });
+    });
+    const memory = aeliosConfig(this.cfg);
+    if (fresh && memory) this.ctx.waitUntil(ingest(memory, [{ role: "assistant", content: `（交接信）${letter}` }], "aelios-resident:letter"));
+    // The prompt and the letter leave the conversation, or every later turn would carry them.
+    await this.takeOut(job.promptId);
+  }
+
+  async resumeLetter(): Promise<void> {
+    return this.letterExclusive(() => this.performResumeLetter());
+  }
+
+  private async performResumeLetter(): Promise<void> {
+    const job = this.letterJob();
+    if (!job) return;
+    if (!job.summary) {
+      if (Date.now() - job.createdAt < 10 * 60_000) {
+        await this.schedule(5, "resumeLetter", {}, { idempotent: true });
+      } else {
+        await this.takeOut(job.promptId);
+        this.deleteLetterJob(job.promptId);
+      }
+      return;
+    }
+    await this.takeOut(job.promptId);
+    const compactions = await this.session.getCompactions();
+    const exists = compactions.some((item) => item.toMessageId === job.toMessageId && item.summary === job.summary);
+    if (!exists) await this.session.addCompaction(job.summary, job.fromMessageId, job.toMessageId);
+    this.setWindow("folded", 1);
+    this.deleteLetterJob(job.promptId);
+  }
+
+  private async answerAfter(id: string): Promise<SessionMessage[]> {
     const history = await this.session.getHistory();
     const at = history.findIndex((message) => message.id === id);
     if (at < 0) return [];
@@ -1490,12 +1625,38 @@ export class Resident extends Think<Env> {
       if (message.role === "user") break;
       answer.push(message);
     }
+    return answer;
+  }
+
+  /** Delete one message and the answer right after it. Returns the answer. */
+  private async takeOut(id: string): Promise<SessionMessage[]> {
+    const answer = await this.answerAfter(id);
     await this.session.deleteMessages([id, ...answer.map((message) => message.id)]);
     return answer;
   }
 
-  /** Fold the older turns into a letter now. False when there was nothing to fold. */
+  private async letterExclusive<T>(work: () => Promise<T>): Promise<T> {
+    if (this.#letterPromise) return this.#letterPromise as Promise<T>;
+    const running = work();
+    this.#letterPromise = running;
+    try {
+      return await running;
+    } finally {
+      if (this.#letterPromise === running) this.#letterPromise = null;
+    }
+  }
+
   private async writeLetter(reason: "idle" | "handoff"): Promise<boolean> {
+    return this.letterExclusive(() => this.performWriteLetter(reason));
+  }
+
+  /** Fold the older turns into a letter now. False when there was nothing to fold. */
+  private async performWriteLetter(reason: "idle" | "handoff"): Promise<boolean> {
+    const existing = this.letterJob();
+    if (existing) {
+      await this.performResumeLetter();
+      return Boolean(existing.summary);
+    }
     this.#letterReason = reason;
     // Cleared before, not after: a message that arrives while the letter is written sets it again.
     await this.ctx.storage.put("wrote_since_letter", false);
@@ -1503,6 +1664,8 @@ export class Resident extends Think<Env> {
       const folded = Boolean(await this.session.compact());
       // The older turns are gone from the prompt, so the next turn writes the cache anew: a new window opens there.
       if (folded) this.setWindow("folded", 1);
+      const job = this.letterJob();
+      if (job?.summary) this.deleteLetterJob(job.promptId);
       return folded;
     } finally {
       this.#letterReason = "handoff";
@@ -1556,7 +1719,9 @@ export class Resident extends Think<Env> {
   }
 
   private heartbeatOn(): boolean {
-    return this.heartbeatTimes() > 0 && promptCache(this.cfg).anthropic.cacheControl.ttl === "1h" && idleMinutes(this.cfg) > 0;
+    const model = this.savedModel() || this.defaultModel;
+    const cached = model === "fake" || onMessages(model);
+    return cached && this.heartbeatTimes() > 0 && promptCache(this.cfg).anthropic.cacheControl.ttl === "1h" && idleMinutes(this.cfg) > 0;
   }
 
   /** The n-th heartbeat of this quiet time, and the next one planned if there are more to come. */
@@ -1627,13 +1792,17 @@ export class Resident extends Think<Env> {
       this.#searches.delete(result.requestId);
       this.#theirTurns.delete(result.requestId);
       this.#readOutside.delete(result.requestId);
+      this.clearTurn(result.requestId);
       this.#turnThread.delete(result.requestId);
       this.#stickerSent.delete(result.requestId);
       this.#turnTasks.delete(result.requestId);
     }
     const before = this.userMessageBefore(result.message.id);
-    // The letter turn: letterTurn() takes the answer and removes both messages.
-    if (this.#letterPromptId && before?.id === this.#letterPromptId) return;
+    const letter = this.letterJob();
+    if (letter && before?.id === letter.promptId) {
+      await this.finishLetter(letter, result.status, result.message.id);
+      return;
+    }
     const asked = before?.text ?? "";
     // Every message of hers starts with its time stamp, so a note prefix can only come from the system.
     const fromThem = Boolean(asked) && !isNote(asked);
@@ -1648,8 +1817,10 @@ export class Resident extends Think<Env> {
     }
     const reply = textOf(result.message).trim();
     const trigger = this.activeTurn?.trigger;
-    // A scheduled check-in has no messenger turn to reply into: post it ourselves.
-    const proactive = trigger === "scheduled" || trigger === "submission";
+    // A check-in, heartbeat, alarm or task result has no messenger turn to reply into: post it ourselves. Told by
+    // its note too, because a response hook replayed after a restart has no trigger.
+    const proactive =
+      isCheckin(asked) || taskOfNote(asked) !== null || ((trigger === "scheduled" || trigger === "submission") && isNote(asked));
     if (proactive && reply && reply !== SKIP && !(await this.checkinAsVoice(reply))) {
       for (const bubble of splitIntoBubbles(reply)) await this.toTelegram(bubble);
     }
@@ -1758,7 +1929,7 @@ export class Resident extends Think<Env> {
           ? `开，没动静 ${Math.max(1, Math.round(idleMinutes(this.cfg)))} 分钟、对话还短时问它要不要找你，一段沉默最多 ${this.heartbeatTimes()} 次`
           : !this.heartbeatTimes()
             ? "关"
-            : "不问（缓存 5 分钟或交接信关着时没有心跳）"
+            : "不问（当前模型没有 Anthropic 缓存，或缓存 5 分钟、交接信关着）"
       }`,
       `闹钟：${this.alarmsOn() ? `开，它定了 ${this.alarms().all().length} 个` : this.alarms().all().length ? `关，留着 ${this.alarms().all().length} 个不响` : "关"}`,
       `表情包：${this.stickersOn() ? `开，${this.stickerSummary()}` : "关"}`,

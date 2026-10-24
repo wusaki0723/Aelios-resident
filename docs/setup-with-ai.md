@@ -148,7 +148,7 @@ curl -s <住户地址>/web/check -H "x-web-key: <网页钥匙>"
    ```bash
    S="$(node -e "process.stdout.write(require('node:crypto').randomBytes(24).toString('base64url'))")" \
      && printf %s "$S" | npx wrangler secret put TG_WEBHOOK_SECRET >/dev/null \
-     && for i in 1 2 3 4 5 6; do sleep 5; R="$(curl -s "<住户地址>/tg/setup?secret=$S")"; case "$R" in *setWebhook*) break;; esac; done; \
+     && for i in 1 2 3 4 5 6; do sleep 5; R="$(curl -s -X POST <住户地址>/tg/setup -H "x-tg-setup-secret: $S")"; case "$R" in *setWebhook*) break;; esac; done; \
      echo "$R"; unset S R
    ```
 

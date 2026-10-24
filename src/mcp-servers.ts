@@ -12,6 +12,9 @@ export const MCP_CALLBACK_PATH = "/mcp/callback";
 export const MAX_MCP_SERVERS = 8;
 /** Tools beyond this many, across all servers, are left out of the turn. */
 export const MAX_MCP_TOOLS = 40;
+/** Bounds for one server's persisted catalog, before it reaches DO storage. */
+export const MAX_MCP_CATALOG_TOOLS = 200;
+export const MAX_MCP_CATALOG_BYTES = 256 * 1024;
 const DESCRIPTION_MAX_CHARS = 300;
 const PARAM_DESCRIPTION_MAX_CHARS = 120;
 export const MCP_RESULT_MAX_CHARS = 6000;
@@ -190,12 +193,43 @@ export function toolTokens(tools: readonly CatalogTool[]): number {
   return tools.reduce((sum, item) => sum + tokensOf(item.name, shorten(item.description, DESCRIPTION_MAX_CHARS), inputSchemaOf(item)), 0);
 }
 
-/** The part of a listed tool that goes out to the model, so one kept from before reads the same as a fresh one. */
-export function catalogItem(item: CatalogTool): CatalogTool {
+function serializableCatalogItem(item: CatalogTool): { item: CatalogTool; text: string } {
   const kept: CatalogTool = { serverId: item.serverId, name: item.name };
   if (item.description !== undefined) kept.description = item.description;
   if (item.inputSchema !== undefined) kept.inputSchema = item.inputSchema;
-  return JSON.parse(JSON.stringify(kept)) as CatalogTool;
+  const text = JSON.stringify(kept);
+  return { item: JSON.parse(text) as CatalogTool, text };
+}
+
+/** The part of a listed tool that goes out to the model, so one kept from before reads the same as a fresh one. */
+export function catalogItem(item: CatalogTool): CatalogTool {
+  return serializableCatalogItem(item).item;
+}
+
+function boundedCatalog(id: string, items: readonly CatalogTool[]): CatalogTool[] {
+  const sorted = [...items].sort((a, b) => a.name.localeCompare(b.name));
+  if (sorted.length > MAX_MCP_CATALOG_TOOLS) {
+    console.error(`mcp: ${id} listed ${sorted.length} tools; keeping the first ${MAX_MCP_CATALOG_TOOLS} by name`);
+  }
+  const catalog: CatalogTool[] = [];
+  let bytes = 2;
+  for (const item of sorted.slice(0, MAX_MCP_CATALOG_TOOLS)) {
+    let serialized: { item: CatalogTool; text: string };
+    try {
+      serialized = serializableCatalogItem(item);
+    } catch (error) {
+      console.error(`mcp: could not serialize ${id}/${item.name}; leaving it out`, error);
+      continue;
+    }
+    const size = new TextEncoder().encode(serialized.text).byteLength + (catalog.length ? 1 : 0);
+    if (bytes + size > MAX_MCP_CATALOG_BYTES) {
+      console.error(`mcp: ${id}/${item.name} exceeds the ${MAX_MCP_CATALOG_BYTES}-byte catalog limit; leaving it out`);
+      continue;
+    }
+    catalog.push(serialized.item);
+    bytes += size;
+  }
+  return catalog;
 }
 
 /**
@@ -203,7 +237,7 @@ export function catalogItem(item: CatalogTool): CatalogTool {
  * (still reconnecting after the agent slept, or out of reach for now) as it listed them the last time it was. The
  * list is part of the prompt's cached prefix, so a server that comes back a few seconds late must not take its tools
  * away for one turn and give them back the next: each of those turns would write the whole conversation again.
- * A server that was never ready has nothing kept and offers nothing.
+ * A server that was never ready has nothing kept and offers nothing. Catalogs are sorted and bounded before storage.
  */
 export function catalogOf(
   serverIds: readonly string[],
@@ -211,7 +245,9 @@ export function catalogOf(
   live: readonly CatalogTool[],
   kept: ReadonlyMap<string, readonly CatalogTool[]>
 ): CatalogTool[] {
-  return serverIds.flatMap((id) => (ready.has(id) ? live.filter((item) => item.serverId === id).map(catalogItem) : [...(kept.get(id) ?? [])]));
+  return [...serverIds]
+    .sort((a, b) => a.localeCompare(b))
+    .flatMap((id) => boundedCatalog(id, ready.has(id) ? live.filter((item) => item.serverId === id) : (kept.get(id) ?? [])));
 }
 
 /**

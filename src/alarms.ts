@@ -219,6 +219,8 @@ export class AlarmStore {
     sql`CREATE TABLE IF NOT EXISTS res_alarms (id TEXT PRIMARY KEY, note TEXT NOT NULL, repeat TEXT NOT NULL, anchor INTEGER NOT NULL,
       next_at INTEGER NOT NULL, schedule_id TEXT NOT NULL, set_at INTEGER NOT NULL)`;
     sql`CREATE TABLE IF NOT EXISTS res_alarm_rings (at INTEGER NOT NULL)`;
+    sql`CREATE TABLE IF NOT EXISTS res_alarm_ring_jobs (key TEXT PRIMARY KEY, at INTEGER NOT NULL)`;
+    sql`INSERT OR IGNORE INTO res_alarm_ring_jobs SELECT 'legacy_' || rowid, at FROM res_alarm_rings`;
   }
 
   all(): Alarm[] {
@@ -239,6 +241,10 @@ export class AlarmStore {
     return this.get(id)!;
   }
 
+  next(id: string, next: number): void {
+    this.sql`UPDATE res_alarms SET next_at = ${next} WHERE id = ${id}`;
+  }
+
   armed(id: string, next: number, scheduleId: string): void {
     this.sql`UPDATE res_alarms SET next_at = ${next}, schedule_id = ${scheduleId} WHERE id = ${id}`;
   }
@@ -249,12 +255,18 @@ export class AlarmStore {
     return had;
   }
 
-  /** Whether another ring fits in the last 24 hours; if it does, it is counted. */
-  ring(now: number): boolean {
-    this.sql`DELETE FROM res_alarm_rings WHERE at < ${now - 86400_000}`;
-    const [row] = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM res_alarm_rings`;
+  /** Count a ring once under its stable alarm-and-time key. */
+  ring(now: number, key: string): boolean {
+    this.sql`DELETE FROM res_alarm_ring_jobs WHERE at < ${now - 86400_000}`;
+    const [existing] = this.sql<{ key: string }>`SELECT key FROM res_alarm_ring_jobs WHERE key = ${key}`;
+    if (existing) return true;
+    const [row] = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM res_alarm_ring_jobs`;
     if ((row?.n ?? 0) >= RINGS_PER_DAY) return false;
-    this.sql`INSERT INTO res_alarm_rings (at) VALUES (${now})`;
+    this.sql`INSERT INTO res_alarm_ring_jobs (key, at) VALUES (${key}, ${now})`;
     return true;
+  }
+
+  releaseRing(key: string): void {
+    this.sql`DELETE FROM res_alarm_ring_jobs WHERE key = ${key}`;
   }
 }

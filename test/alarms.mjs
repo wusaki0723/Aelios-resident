@@ -1,6 +1,7 @@
 // Unit tests for the alarms the resident sets itself and the heartbeat's prompt (src/alarms.ts, src/prompts.ts).
 // Usage: node test/alarms.mjs
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,7 +18,7 @@ await build({
   outfile: out,
   logLevel: "error"
 });
-const { parseRule, nextRing, parseAt, planAlarm, ruleInWords, alarmNote, heartbeatPrompt, isCheckin, isNote, SELF_MIN_MINUTES } = await import(
+const { AlarmStore, RINGS_PER_DAY, parseRule, nextRing, parseAt, planAlarm, ruleInWords, alarmNote, heartbeatPrompt, isCheckin, isNote, SELF_MIN_MINUTES } = await import(
   pathToFileURL(join(process.cwd(), out)).href
 );
 rmSync(dir, { recursive: true, force: true });
@@ -121,6 +122,22 @@ step("a ring's note and the heartbeat are notes, not from them, and may pass wit
   assert.doesNotMatch(heartbeatPrompt("x", 55, 1, 1, false), /of 1/, "no count when there is only one");
   assert.match(heartbeatPrompt("x", 1, 1, 1, true), /1 minute,.*set_alarm/s);
   assert.ok(!isCheckin("[10-24 周六 21:30] 你好"));
+});
+
+step("a ring is counted once under its stable key and a failed admission can release it", () => {
+  const db = new DatabaseSync(":memory:");
+  const sql = (strings, ...values) => {
+    const statement = db.prepare(strings.join("?"));
+    return /^\s*SELECT/i.test(strings[0]) ? statement.all(...values) : (statement.run(...values), []);
+  };
+  const store = new AlarmStore(sql);
+  const now = Date.now();
+  assert.equal(store.ring(now, "alarm_a_1"), true);
+  assert.equal(store.ring(now, "alarm_a_1"), true, "replaying one ring does not consume another slot");
+  for (let n = 2; n <= RINGS_PER_DAY; n += 1) assert.equal(store.ring(now, `alarm_a_${n}`), true);
+  assert.equal(store.ring(now, "alarm_over"), false);
+  store.releaseRing("alarm_a_1");
+  assert.equal(store.ring(now, "alarm_over"), true);
 });
 
 if (failed) process.exitCode = 1;

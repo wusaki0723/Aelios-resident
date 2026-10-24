@@ -216,10 +216,14 @@ if (process.argv[2] === "worker") {
 
   await step("worker: /tg/setup over http leaves the menu button alone", async () => {
     await fetch(`${MOCK}/__reset`);
+    assert.equal((await call("/tg/setup?secret=wrong")).status, 401);
     const response = await call("/tg/setup?secret=test-secret");
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
     const body = await response.json();
     assert.ok(body.setChatMenuButton.skipped);
+    // A script can send the secret as a header instead of in the address.
+    assert.equal((await call("/tg/setup", { "x-tg-setup-secret": "test-secret" }, "POST")).status, 200);
     const log = await (await fetch(`${MOCK}/__log`)).json();
     assert.ok(log.some((e) => e.kind === "tg.setWebhook"));
     assert.ok(!log.some((e) => e.kind === "tg.setChatMenuButton"));

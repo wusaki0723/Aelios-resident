@@ -11,9 +11,9 @@ import { build } from "esbuild";
 // Packages stay outside the bundle and load from node_modules, so the bundle is written next to it.
 mkdirSync("node_modules/.cache", { recursive: true });
 const dir = mkdtempSync(join("node_modules/.cache", "resident-web-"));
-const out = join(dir, "fetch.mjs");
-await build({ entryPoints: ["src/web/fetch.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: out, logLevel: "error" });
-const { webFetchTool } = await import(pathToFileURL(join(process.cwd(), out)).href);
+await build({ entryPoints: ["src/web/fetch.ts", "src/web/validate-url.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outdir: dir, logLevel: "error" });
+const { webFetchTool } = await import(pathToFileURL(join(process.cwd(), dir, "fetch.js")).href);
+const { validateUrlWithDns } = await import(pathToFileURL(join(process.cwd(), dir, "validate-url.js")).href);
 rmSync(dir, { recursive: true, force: true });
 
 // --- The fake internet -----------------------------------------------------------------------------
@@ -54,13 +54,17 @@ function html(body) {
   return new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+let dnsReply = (name, type) => {
+  const data = name === "evil.test" ? "10.0.0.7" : PUBLIC;
+  return type === "A" ? [{ type: 1, data }] : [];
+};
+
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith("https://cloudflare-dns.com/dns-query")) {
     const name = new URL(url).searchParams.get("name");
     const type = new URL(url).searchParams.get("type");
-    const data = name === "evil.test" ? "10.0.0.7" : PUBLIC;
-    return Response.json({ Answer: type === "A" ? [{ data }] : [] });
+    return Response.json({ Answer: dnsReply(name, type) });
   }
   // As the site sees them: one value per name, names in lower case.
   const headers = Object.fromEntries(new Headers(init.headers ?? {}));
@@ -327,6 +331,59 @@ await step("a keyed page is never opened in the browser, which would not carry t
   const plain404 = await read({ compressor: null }, { url: "https://example.com/missing" });
   assert.doesNotMatch(plain404, /key/);
   assert.equal(b.calls.length, 0);
+});
+
+await step("DNS validation fails closed on empty answers and CNAME-only answers", async () => {
+  const previous = dnsReply;
+  try {
+    for (const answer of [undefined, [{ type: 5, data: "alias.example" }]]) {
+      dnsReply = () => (answer ? [...answer] : []);
+      const result = await validateUrlWithDns("https://empty.example/");
+      assert.deepEqual(result, { valid: false, error: "Unable to validate URL hostname resolution" });
+    }
+    dnsReply = (name, type) => type === "A" ? [{ type: 5, data: "alias.example" }, { type: 1, data: PUBLIC }] : [];
+    assert.deepEqual(await validateUrlWithDns("https://example.com/"), { valid: true });
+  } finally {
+    dnsReply = previous;
+  }
+});
+
+await step("DNS validation accepts only syntactically valid A and AAAA addresses", async () => {
+  const previous = dnsReply;
+  try {
+    for (const [type, code, data] of [["A", 1, "999.1.1.1"], ["AAAA", 28, "not-an-ip"]]) {
+      dnsReply = (name, requested) => requested === type ? [{ type: code, data }] : [];
+      const result = await validateUrlWithDns("https://invalid.example/");
+      assert.equal(result.valid, false, `${type} answer ${data} must not pass`);
+    }
+    for (const data of ["::1", "0:0:0:0:0:0:0:1"]) {
+      dnsReply = (name, type) => type === "AAAA" ? [{ type: 28, data }] : [];
+      assert.deepEqual(await validateUrlWithDns("https://loopback.example/"), { valid: false, error: "URL hostname resolves to a private IP address" });
+    }
+  } finally {
+    dnsReply = previous;
+  }
+});
+
+await step("DNS results are not shared across requests, while the caller map deduplicates one fetch", async () => {
+  const previous = dnsReply;
+  let calls = 0;
+  try {
+    dnsReply = (name, type) => {
+      calls += 1;
+      return type === "A" ? [{ type: 1, data: PUBLIC }] : [];
+    };
+    assert.equal((await validateUrlWithDns("https://example.com/")).valid, true);
+    assert.equal((await validateUrlWithDns("https://example.com/")).valid, true);
+    assert.equal(calls, 4, "each independent validation resolves afresh");
+    const cache = new Map();
+    const results = await Promise.all([validateUrlWithDns("https://example.com/", cache), validateUrlWithDns("https://example.com/", cache)]);
+    assert.ok(results.every((result) => result.valid));
+    assert.equal(calls, 6, "concurrent hops share only the caller-provided lookup");
+    assert.equal(cache.size, 1);
+  } finally {
+    dnsReply = previous;
+  }
 });
 
 console.log(failures ? `\n${failures} failed` : "\nall passed");

@@ -140,8 +140,8 @@ export function memoryTools(config: AeliosConfig): ToolSet {
 
 export type IngestMessage = { role: "user" | "assistant"; content: string };
 
-/** Record messages in Aelios. Failures are logged; the chat never waits on memory. */
-export async function ingest(config: AeliosConfig, messages: IngestMessage[], source: string): Promise<void> {
+/** Record messages in Aelios and report whether they were accepted. */
+export async function ingest(config: AeliosConfig, messages: IngestMessage[], source: string): Promise<boolean> {
   try {
     const response = await aelios(config, "/v1/memory/ingest", {
       method: "POST",
@@ -153,8 +153,10 @@ export async function ingest(config: AeliosConfig, messages: IngestMessage[], so
       })
     });
     if (!response.ok) console.error("aelios: ingest failed", { status: response.status });
+    return response.ok;
   } catch (error) {
     console.error("aelios: ingest failed", { error: String(error) });
+    return false;
   }
 }
 

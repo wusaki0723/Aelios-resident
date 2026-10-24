@@ -34,10 +34,10 @@ const timeZone = (value: string) => {
   }
 };
 
-const count = (value: string) => (Number(value) > 0 ? null : "要填一个大于 0 的数");
+const count = (value: string) => (Number.isFinite(Number(value)) && Number(value) > 0 ? null : "要填一个大于 0 的数");
 const times = (value: string) =>
   /^(on|off)$/i.test(value) || (/^\d+$/.test(value) && Number(value) <= MAX_HEARTBEATS) ? null : `填 0 到 ${MAX_HEARTBEATS} 次，0 是不问`;
-const minutes = (value: string) => (value.toLowerCase() === "off" || Number(value) >= 0 ? null : "填分钟数，或者 off");
+const minutes = (value: string) => (value.toLowerCase() === "off" || (Number.isFinite(Number(value)) && Number(value) >= 0) ? null : "填分钟数，或者 off");
 
 export const FIELDS: readonly Field[] = [
   { key: "CUSTOM_BASE_URL", kind: "text", check: address },

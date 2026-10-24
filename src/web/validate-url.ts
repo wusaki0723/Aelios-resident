@@ -5,10 +5,10 @@
  * Validate that a URL is safe to forward to the CF Browser Rendering API.
  * Only allows http: and https: schemes to prevent SSRF via file:/data:/etc.
  *
- * Note on DNS rebinding: for REST API routes the actual fetch is performed by
- * Cloudflare's infrastructure, not by this Worker.  We validate the URL
- * statically here; Puppeteer routes additionally intercept every sub-request
- * via `page.setRequestInterception` for runtime SSRF protection.
+ * Note on DNS rebinding: validation and a subsequent ordinary Workers fetch
+ * resolve the name separately, so these checks cannot eliminate that TOCTOU
+ * window. Puppeteer routes additionally intercept every sub-request via
+ * `page.setRequestInterception` for runtime SSRF protection.
  */
 
 export type UrlValidationResult = { valid: true } | { valid: false; error: string };
@@ -30,7 +30,7 @@ const DNS_ENDPOINT = "https://cloudflare-dns.com/dns-query";
 const DNS_TIMEOUT_MS = 3_000;
 
 function isIpv4Literal(host: string): boolean {
-  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host);
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) && host.split(".").every((part) => String(Number(part)) === part && Number(part) <= 255);
 }
 
 function isIpv6Literal(host: string): boolean {
@@ -56,8 +56,16 @@ function isPrivateIpLiteral(host: string): boolean {
     );
   }
 
-  const bare = host.replace(/^\[|\]$/g, "");
+  let bare = host.replace(/^\[|\]$/g, "");
+  if (bare.includes(":")) {
+    try {
+      bare = new URL(`http://[${bare}]/`).hostname.slice(1, -1);
+    } catch {
+      return true;
+    }
+  }
   return (
+    bare === "::1" ||
     /^(fc|fd|fe[89a-f])/i.test(bare) || // ULA (fc00::/7) + link-local (fe80::/10) + site-local (fec0::/10)
     /^::ffff:/i.test(bare) || // IPv4-mapped IPv6 (::ffff:0:0/96)
     /^64:ff9b:/i.test(bare) || // NAT64 prefixes (64:ff9b::/96 + 64:ff9b:1::/48)
@@ -81,55 +89,26 @@ function validateParsedUrl(parsed: URL): UrlValidationResult {
   return { valid: true };
 }
 
-/**
- * Process-wide resolution cache.
- *
- * Without this, every validated request paid two fresh DoH round-trips before
- * any real work started — the per-call `new Map()` default meant the cache was
- * born empty and thrown away on each call. Entries are held for
- * `DNS_CACHE_TTL_MS`, which keeps a rebinding window far shorter than the
- * lifetime of a hot Worker isolate.
- */
-const globalDnsCache = new Map<string, { at: number; lookup: Promise<string[]> }>();
-const DNS_CACHE_TTL_MS = 60_000;
-const DNS_CACHE_MAX_ENTRIES = 1_000;
-
-function getGlobalCached(key: string): Promise<string[]> | undefined {
-  const entry = globalDnsCache.get(key);
-  if (!entry) return undefined;
-  if (Date.now() - entry.at > DNS_CACHE_TTL_MS) {
-    globalDnsCache.delete(key);
-    return undefined;
+function validDnsAddress(data: unknown, type: 1 | 28): data is string {
+  if (typeof data !== "string") return false;
+  if (type === 1) return isIpv4Literal(data);
+  try {
+    return isIpv6Literal(new URL(`http://[${data}]/`).hostname);
+  } catch {
+    return false;
   }
-  return entry.lookup;
 }
 
-function setGlobalCached(key: string, lookup: Promise<string[]>): void {
-  // Crude bound: an isolate serving many hosts should not grow without limit.
-  if (globalDnsCache.size >= DNS_CACHE_MAX_ENTRIES) {
-    globalDnsCache.clear();
-  }
-  globalDnsCache.set(key, { at: Date.now(), lookup });
-}
-
-async function resolveHostname(
-  hostname: string,
-  cache?: Map<string, Promise<string[]>>,
-): Promise<string[]> {
+async function resolveHostname(hostname: string, cache?: Map<string, Promise<string[]>>): Promise<string[]> {
   const cacheKey = hostname.toLowerCase();
-
-  // A caller-supplied cache (the puppeteer request interceptor) is scoped to a
-  // single page load and takes precedence; otherwise use the shared one.
-  const cached = cache?.get(cacheKey) ?? getGlobalCached(cacheKey);
-  if (cached) {
-    return cached;
-  }
+  const cached = cache?.get(cacheKey);
+  if (cached) return cached;
 
   const lookup = (async () => {
-    const recordTypes = ["A", "AAAA"];
+    const recordTypes = [{ name: "A", code: 1 }, { name: "AAAA", code: 28 }] as const;
     const settled = await Promise.all(
-      recordTypes.map(async (type) => {
-        const params = new URLSearchParams({ name: hostname, type });
+      recordTypes.map(async ({ name, code }) => {
+        const params = new URLSearchParams({ name: hostname, type: name });
         const response = await fetch(`${DNS_ENDPOINT}?${params.toString()}`, {
           headers: { Accept: "application/dns-json" },
           signal: AbortSignal.timeout(DNS_TIMEOUT_MS),
@@ -140,28 +119,28 @@ async function resolveHostname(
         }
 
         const payload = await response.json<{
-          Answer?: Array<{ data?: unknown }>;
+          Answer?: Array<{ type?: unknown; data?: unknown }>;
         }>();
 
         return (payload.Answer ?? [])
-          .map((answer) => answer.data)
-          .filter((answer): answer is string => typeof answer === "string");
+          .filter((answer) => answer.type === code && validDnsAddress(answer.data, code))
+          .map((answer) => answer.data as string);
       }),
     );
 
-    return settled.flat();
+    const addresses = settled.flat();
+    if (!addresses.length) throw new Error("DNS lookup returned no valid A or AAAA records");
+    return addresses;
   })();
 
-  // A failed lookup must not be cached: a transient DoH error would otherwise
-  // block the host until the entry expired.
+  // Only the caller's single-fetch map deduplicates lookups. Failed lookups are
+  // removed so a transient DoH error does not poison the rest of that fetch.
   const shared = lookup.catch((err) => {
     if (cache?.get(cacheKey) === shared) cache.delete(cacheKey);
-    if (getGlobalCached(cacheKey) === shared) globalDnsCache.delete(cacheKey);
     throw err;
   });
 
   cache?.set(cacheKey, shared);
-  setGlobalCached(cacheKey, shared);
   return shared;
 }
 

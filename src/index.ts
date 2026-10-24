@@ -1,6 +1,7 @@
 // The Worker in front of the resident:
 //   POST /messengers/telegram/webhook   Telegram → secret check, allowlist, slash commands → the resident
-//   GET  /tg/setup?secret=…             points the bot's webhook here (open once after deploy); opened over https,
+//   GET  /tg/setup?secret=…             points the bot's webhook here (open once after deploy; POST with the
+//                                       x-tg-setup-secret header works too, for scripts); opened over https,
 //                                       also makes the bot's menu button open the web page as a Mini App
 //   /web/*                              the web page's API (same conversation as Telegram, the model, the persona
 //                                       and the settings), behind WEB_KEY, or inside Telegram behind signed
@@ -70,17 +71,23 @@ async function handleWebhook(request: Request, env: Env, ctx: ExecutionContext):
   return agent.fetch(new Request(request.url, { method: "POST", headers: request.headers, body }));
 }
 
-async function handleSetup(env: Env, url: URL): Promise<Response> {
+async function handleSetup(request: Request, env: Env, url: URL): Promise<Response> {
+  const headers = { "cache-control": "no-store" };
+  if (request.method !== "GET" && request.method !== "POST") {
+    return new Response("method not allowed", { status: 405, headers: { ...headers, allow: "GET, POST" } });
+  }
   const secret = env.TG_WEBHOOK_SECRET?.trim();
-  if (!secret || !env.TG_BOT_TOKEN) return new Response("set TG_BOT_TOKEN and TG_WEBHOOK_SECRET first", { status: 400 });
-  if (!timingSafeEqual(url.searchParams.get("secret") ?? "", secret)) return new Response("unauthorized", { status: 401 });
+  if (!secret || !env.TG_BOT_TOKEN) return new Response("set TG_BOT_TOKEN and TG_WEBHOOK_SECRET first", { status: 400, headers });
+  // Opened in a browser the secret is in the address; a script can send it as a header instead.
+  const given = request.headers.get("x-tg-setup-secret") ?? url.searchParams.get("secret") ?? "";
+  if (!timingSafeEqual(given, secret)) return new Response("unauthorized", { status: 401, headers });
   // The address an MCP sign-in started from the chat comes back to.
   await (await getAgentByName(env.RESIDENT, AGENT_NAME)).noteOrigin(url.origin);
   // Telegram only opens Mini Apps from https; over http (local tests) the menu button is left alone.
   const https = url.protocol === "https:";
   const result = await setWebhook(telegram(env), `${url.origin}${WEBHOOK_PATH}`, secret, https ? { miniAppUrl: `${url.origin}/` } : {});
   if (!https) result.setChatMenuButton = { skipped: "the Mini App needs https; open /tg/setup on the https address" };
-  return Response.json(result);
+  return Response.json(result, { headers });
 }
 
 /** The web door is open only with WEB_KEY, sent by the page as the x-web-key header. */
@@ -230,7 +237,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === WEBHOOK_PATH) return await handleWebhook(request, env, ctx);
-      if (url.pathname === "/tg/setup") return await handleSetup(env, url);
+      if (url.pathname === "/tg/setup") return await handleSetup(request, env, url);
       if (url.pathname.startsWith("/web/")) return await handleWeb(request, env, url);
       const sticker = url.pathname.match(/^\/stickers\/([0-9a-f]{24})$/);
       if (sticker && request.method === "GET") {
@@ -265,7 +272,7 @@ export default {
     } catch (error) {
       // Non-2xx makes Telegram redeliver; the messenger dedupes by message id.
       console.error("aelios-resident request failed", { path: url.pathname, error: String(error) });
-      return new Response("error", { status: 500 });
+      return new Response("error", { status: 500, headers: url.pathname === "/tg/setup" ? { "cache-control": "no-store" } : undefined });
     }
   }
 } satisfies ExportedHandler<Env>;

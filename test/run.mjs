@@ -473,6 +473,9 @@ if (phase === "main") {
     for (const [key, text, problem] of [
       ["TIME_ZONE", "Mars/Olympus", /时区/],
       ["KEEP_RECENT_TOKENS", "abc", /大于 0/],
+      ["KEEP_RECENT_TOKENS", "Infinity", /大于 0/],
+      ["KEEP_RECENT_TOKENS", "1e309", /大于 0/],
+      ["LETTER_IDLE_MINUTES", "Infinity", /分钟数/],
       ["CACHE_TTL", "2h", /只能填/],
       ["AELIOS_URL", "ftp://x", /https/],
       ["NOT_A_SETTING", "x", /没有这个设置/],
