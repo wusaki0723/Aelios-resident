@@ -210,6 +210,7 @@ Tap its avatar at the top left of the web door, then the pen on the **Persona** 
 
 - The persona is stored in the Durable Object, not in the code, so a public repository never carries it.
 - The last 10 versions are kept and can be restored with one click.
+- **It can change its own persona** if you let it: switch on 「让它自己改」 (`PERSONA_EDIT`, off by default) on the persona page. It then gets one tool, `edit_persona`, to add to its persona or replace a piece of it. The change is saved like one of yours, applies from its next reply, shows as a line in the chat, and the version before it is among the earlier versions, so you can put it back. Each change rewrites the cache once on the next message.
 - If you use the API key that comes with Max, keep the words "Claude Code" out of the persona.
 - The resident's built-in chat rules, letter prompt and check-in prompts are written in English and assume nothing about who you are or your gender. It chats in the language the persona is written in.
 
@@ -544,6 +545,7 @@ Everything is changed on the settings page, except `WEB_KEY` (a Cloudflare secre
 | `HEARTBEAT` | `3` | When the quiet time is up but the chat is below the letter threshold (or there is nothing to fold), ask whether it wants to reach out, then again after each further quiet time, at most this many times per silence. `0` turns it off, `10` at most |
 | `QUIET_HOURS` | `00:00-08:00` | Hours in `TIME_ZONE` when the heartbeat does not ask; hours past midnight such as `23:00-07:00` work. `off` for none |
 | `ALARMS` | `off` | `on` lets it set its own alarms to come back to you, at most 10 |
+| `PERSONA_EDIT` | `off` | `on` lets it change its own persona with `edit_persona`; switched on the persona page |
 | `AELIOS_URL` / `AELIOS_API_KEY` | empty | Long-term memory; when empty, Aelios is not used and the chat does not go through it |
 | `AELIOS_NAMESPACE` | `default` | The memory space for the memory tools, boot packet and letters; it must match the identity's space in Aelios. All three keys read and write `default`; only `CHATBOX_API_KEY` can use another |
 | `AELIOS_IDENTITY` | empty (the key's first identity) | Which Aelios identity the chat goes through; the model you use must be among its main models |
