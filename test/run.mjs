@@ -34,6 +34,10 @@
 //   telegram the bot token saved on the settings page instead of Cloudflare (start wrangler with
 //            --var TG_BOT_TOKEN: --var TG_WEBHOOK_SECRET:): connected, the resident started again, the Mini App
 //            and commands with that token, connecting again, a token Telegram refuses, taking it off
+//   menu     the bot's commands and menu button over https (start wrangler with --var TG_BOT_TOKEN:
+//            --var TG_WEBHOOK_SECRET: --local-upstream resident.test --upstream-protocol https): not cut off by
+//            starting again when Telegram is slow, set when the resident starts if it never was (once, another
+//            resident's too), and not for a bot whose updates go somewhere else
 //   residents  more than one resident (src/residents.ts): added and listed, its own addresses under /r/<id>, its
 //            own settings, conversation, Aelios identity, Telegram bot, avatar and task reports, one push key for
 //            all, deleted and added again empty
@@ -2664,6 +2668,80 @@ if (phase === "telegram") {
     assert.equal((await post("在吗", { secret })).status, 401);
     assert.equal((await fetch(`${WORKER}/web/check`, { headers: { "x-telegram-init-data": initData(TOKEN) } })).status, 401);
     assert.equal((await web("/web/telegram/connect", KEY, {})).status, 400);
+  });
+}
+
+if (phase === "menu") {
+  await fetch(`${MOCK}/__reset`);
+  const KEY = "test-web-key";
+  // The address the Worker sees (--local-upstream): Telegram only opens a Mini App from https.
+  const SITE = "https://resident.test";
+  const bot = (n) => `65432${n}:${String(n).repeat(35)}`;
+  const fault = (faults) => fetch(`${MOCK}/__faults`, { method: "POST", body: JSON.stringify(faults) });
+  const menus = async (token) => (await log()).filter((e) => e.kind === "tg.setChatMenuButton" && e.token === token).map((e) => e.body.menu_button.web_app.url);
+  const commands = async (token) => (await log()).filter((e) => e.kind === "tg.setMyCommands" && e.token === token).length;
+  const restarted = async (path) => {
+    await sleep(2500);
+    for (let i = 0; i < 50; i += 1) {
+      if ((await web(path, KEY).catch(() => null))?.status === 200) return;
+      await sleep(200);
+    }
+    throw new Error("the resident did not come back");
+  };
+  // What the resident sets when it starts is not waited for; give it a moment.
+  const soon = async (check) => {
+    for (let i = 0; i < 30 && !(await check()); i += 1) await sleep(200);
+  };
+
+  await step("a slow Telegram does not cut a new bot's commands and menu button off", async () => {
+    await fault({ slowSetWebhook: 1500 });
+    const response = await web("/web/config", KEY, { key: "TG_BOT_TOKEN", text: bot(1) });
+    await fault({ slowSetWebhook: 0 });
+    assert.equal(response.status, 200, "answered, not cut off by starting again");
+    assert.equal((await response.json()).telegram.here, true);
+    assert.equal(await commands(bot(1)), 1);
+    assert.deepEqual(await menus(bot(1)), [`${SITE}/`]);
+    await restarted("/web/check");
+    await sleep(1500);
+    assert.deepEqual(await menus(bot(1)), [`${SITE}/`], "not set again when it starts");
+  });
+
+  await step("a bot whose menu button never got set gets it, and the commands, when the resident starts again", async () => {
+    await fault({ menuButton: false });
+    assert.equal((await web("/web/config", KEY, { key: "TG_BOT_TOKEN", text: bot(2) })).status, 200);
+    assert.equal((await menus(bot(2))).length, 1, "turned down while connecting");
+    const before = await commands(bot(2));
+    await restarted("/web/check");
+    await soon(async () => (await menus(bot(2))).length === 2);
+    assert.deepEqual(await menus(bot(2)), [`${SITE}/`, `${SITE}/`]);
+    assert.equal(await commands(bot(2)), before + 1);
+  });
+
+  await step("once set, it is not set again each time the resident starts", async () => {
+    assert.equal((await web("/web/config", KEY, { key: "TG_BOT_TOKEN", text: bot(1) })).status, 200);
+    assert.equal((await menus(bot(1))).length, 2, "connecting again sets it");
+    await restarted("/web/check");
+    await sleep(1500);
+    assert.equal((await menus(bot(1))).length, 2);
+  });
+
+  await step("another resident's bot gets its own page when it starts", async () => {
+    assert.equal((await web("/web/residents", KEY, { id: "mochi", name: "麻薯" })).status, 200);
+    await fault({ menuButton: false });
+    assert.equal((await web("/r/mochi/web/config", KEY, { key: "TG_BOT_TOKEN", text: bot(3) })).status, 200);
+    await restarted("/r/mochi/web/check");
+    await soon(async () => (await menus(bot(3))).length === 2);
+    assert.deepEqual(await menus(bot(3)), [`${SITE}/?r=mochi`, `${SITE}/?r=mochi`]);
+  });
+
+  await step("a bot whose updates have gone somewhere else is left alone when the resident starts", async () => {
+    await fault({ menuButton: false });
+    assert.equal((await web("/r/mochi/web/config", KEY, { key: "TG_BOT_TOKEN", text: bot(4) })).status, 200);
+    // Before it starts again, the bot is pointed somewhere else, as when it moved to another resident.
+    await fetch(`${MOCK}/bot${bot(4)}/setWebhook`, { method: "POST", body: JSON.stringify({ url: "https://elsewhere.test/messengers/telegram/webhook" }) });
+    await restarted("/r/mochi/web/check");
+    await sleep(1500);
+    assert.equal((await menus(bot(4))).length, 1, "only the one turned down while connecting");
   });
 }
 

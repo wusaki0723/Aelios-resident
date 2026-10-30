@@ -319,15 +319,15 @@ export async function setWebhook(
     secret_token: secret,
     allowed_updates: ["message"]
   });
-  const commands = await call(config, "setMyCommands", { commands: COMMANDS });
-  const result: Record<string, unknown> = { setWebhook: await webhook.json(), setMyCommands: await commands.json() };
-  if (miniAppUrl) {
-    const menu = await call(config, "setChatMenuButton", {
-      menu_button: { type: "web_app", text: MENU_BUTTON_TEXT, web_app: { url: miniAppUrl } }
-    });
-    result.setChatMenuButton = await menu.json().catch(() => ({ ok: false, status: menu.status }));
-  }
-  return result;
+  return { setWebhook: await webhook.json(), ...(await setMenu(config, miniAppUrl)) };
+}
+
+/** The commands, and with `miniAppUrl` (https) the default menu button opening it as a Mini App. Telegram's answers. */
+export async function setMenu(config: TelegramConfig, miniAppUrl?: string): Promise<{ setMyCommands: Answer<true>; setChatMenuButton?: Answer<true> }> {
+  const setMyCommands = await answer<true>(await call(config, "setMyCommands", { commands: COMMANDS }));
+  if (!miniAppUrl) return { setMyCommands };
+  const menu = await call(config, "setChatMenuButton", { menu_button: { type: "web_app", text: MENU_BUTTON_TEXT, web_app: { url: miniAppUrl } } });
+  return { setMyCommands, setChatMenuButton: await answer<true>(menu) };
 }
 
 /** Who the token belongs to: the bot's @username, or what Telegram said was wrong with the token. */

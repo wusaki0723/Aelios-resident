@@ -171,6 +171,13 @@ const server = http.createServer(async (req, res) => {
     if (token.includes(":bad")) return reply({ ok: false, error_code: 401, description: "Unauthorized" }, 401);
     // faults.slowDeleteWebhook: milliseconds a bot takes to let go, to hold a resident's deletion open.
     if (method === "deleteWebhook" && faults.slowDeleteWebhook) await new Promise((resolve) => setTimeout(resolve, faults.slowDeleteWebhook));
+    // faults.slowSetWebhook: milliseconds Telegram takes to take a webhook, longer than the resident waits to start again.
+    if (method === "setWebhook" && faults.slowSetWebhook) await new Promise((resolve) => setTimeout(resolve, faults.slowSetWebhook));
+    // faults.menuButton false: Telegram turns the menu button down once, as when it was never set.
+    if (method === "setChatMenuButton" && faults.menuButton === false) {
+      faults.menuButton = true;
+      return reply({ ok: false, error_code: 500, description: "Internal Server Error" }, 500);
+    }
     const chat = { id: Number(json?.chat_id ?? 42), type: "private" };
     const message = () => ({ message_id: nextMessageId++, date: Math.floor(Date.now() / 1000), chat, text: json?.text });
     switch (method) {
