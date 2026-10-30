@@ -46,6 +46,8 @@ interface Env {
   QUIET_HOURS?: string;
   // Alarms the resident sets for itself (alarms.ts): off (default) or on.
   ALARMS?: string;
+  // It changes its own persona with edit_persona (persona-edit.ts): off (default) or on.
+  PERSONA_EDIT?: string;
   // Local tests only: how many seconds a minute of set_alarm's in_minutes lasts.
   ALARM_MINUTE_SECONDS?: string;
   // Local tests only: seconds of silence after which a turn is cut and run again (180 by default).

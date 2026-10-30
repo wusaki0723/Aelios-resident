@@ -472,6 +472,16 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
     <textarea class="persona-edit" x-model="personaDraft" :maxlength="PERSONA_MAX" :placeholder="'没填时用的是：' + persona.fallback" aria-label="人设"></textarea>
     <p class="error" x-show="/claude\s*code/i.test(personaDraft)">用 Max 附带的 API key 时，人设里有「Claude Code」这几个字会报错，换个说法。</p>
     <span class="hint" x-text="personaDraft.trim().length + ' / ' + PERSONA_MAX + ' 字' + (persona.at ? ' · 上次改：' + fmt(persona.at) : '')"></span>
+    <div class="set" x-show="field('PERSONA_EDIT')">
+      <div class="label"><span x-text="PERSONA_EDIT_META.label"></span></div>
+      <div class="choices">
+        <template x-for="choice in ['on', 'off']" :key="choice">
+          <button class="choice" type="button" :class="inEffect(PERSONA_EDIT_META) === choice && 'on'" :disabled="Boolean(configBusy)" @click="pickChoice(PERSONA_EDIT_META, choice)" x-text="choice === 'on' ? '开' : '关'"></button>
+        </template>
+      </div>
+      <p class="hint">开了它能自己改人设，聊天里会提示；改之前的在「之前的版本」里。</p>
+      <p class="error" x-show="configError.PERSONA_EDIT" x-text="configError.PERSONA_EDIT"></p>
+    </div>
     <details x-show="persona.versions.length">
       <summary x-text="'之前的版本（' + persona.versions.length + '）'"></summary>
       <template x-for="version in persona.versions" :key="version.at">

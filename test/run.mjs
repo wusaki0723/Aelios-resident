@@ -690,6 +690,40 @@ if (phase === "main") {
     await post("你是谁");
     assert.deepEqual(await waitForSends(before, 1), [fallback]);
   });
+
+  await step("with PERSONA_EDIT on it changes its own persona, which the web page shows with the one before", async () => {
+    const say = async (text) => {
+      const before = (await sent()).length;
+      await post(text);
+      return (await waitForSends(before, 1)).join("\n");
+    };
+    const persona = async () => (await web("/web/persona", "test-web-key")).json();
+    let config = await (await web("/web/config", "test-web-key")).json();
+    assert.equal(config.fields.find((f) => f.key === "PERSONA_EDIT").value, "", "off unless turned on");
+    assert.match(await say("改人设工具在吗"), /没有 edit_persona/);
+    config = await (await web("/web/config", "test-web-key", { key: "PERSONA_EDIT", text: "on" })).json();
+    assert.equal(config.fields.find((f) => f.key === "PERSONA_EDIT").value, "on");
+    assert.match(await say("改人设工具在吗"), /有 edit_persona/);
+    // Added at the end of the default line, then a piece of it replaced: each one an earlier version.
+    assert.match(await say("人设加一句：你叫麻薯。"), /"saved":true/);
+    assert.equal((await persona()).text, `${fallback}\n\n你叫麻薯。`);
+    assert.match(await say("人设改成：你叫麻薯。=>你叫团子。"), /"saved":true/);
+    const changed = await persona();
+    assert.equal(changed.text, `${fallback}\n\n你叫团子。`);
+    assert.equal(changed.versions[0].text, `${fallback}\n\n你叫麻薯。`);
+    assert.equal(changed.fallback, fallback);
+    // What it cannot do: change a piece that is not there, write what some keys refuse, or leave nothing.
+    assert.match(await say("人设改成：没有这句=>随便"), /Not changed: old_text is not in your persona/);
+    assert.match(await say("人设加一句：我住在 Claude Code 里。"), /Not changed: Some Claude API keys/);
+    assert.match(await say(`人设改成：${fallback}\n\n你叫团子。=>`), /Not changed: That would leave your persona empty/);
+    assert.equal((await persona()).text, `${fallback}\n\n你叫团子。`, "nothing refused was saved");
+    const notices = (await (await web("/web/messages", "test-web-key")).json()).data.filter((line) => line.kind === "notice" && line.text === "它自己改了人设");
+    assert.equal(notices.length, 2, "a line in the chat for each change");
+    // Off again: the tool is gone, the persona it wrote stays.
+    await web("/web/config", "test-web-key", { key: "PERSONA_EDIT", text: "" });
+    assert.match(await say("改人设工具在吗"), /没有 edit_persona/);
+    await web("/web/persona", "test-web-key", { text: "" });
+  });
 }
 
 if (phase === "checkin") {

@@ -204,6 +204,7 @@ import { AROUND, SEARCH_PAGE, SEARCH_ROWS, hitIn, searchQuery, searchable, store
 import { findTools, type FindHost } from "./find-tools";
 import { RoleStore, unknownRole, withRole, type Role } from "./task-roles";
 import { MadeFiles, fileTools, type FileHost, type MadeFile } from "./made-files";
+import { PERSONA_MAX_CHARS, personaTools } from "./persona-edit";
 import { USAGE_KEEP_DAYS, UsageStore, entryOf, usageLabel, usageSpans, type StepLike, type UsageLabel, type UsageRow, type UsageTotals } from "./usage";
 import { learnFromSearch, searched, type Searched } from "./web/learn";
 import { validateUrlWithDns } from "./web/validate-url";
@@ -238,7 +239,6 @@ const HANDS_FILES_BYTES = 50 * 1024 * 1024;
 const FILES_ON_REPORT = 8;
 // How long one of its steps may take: a big context on a slow model takes minutes (hands.mjs waits a little longer).
 const HANDS_MODEL_MINUTES = 5;
-const PERSONA_MAX_CHARS = 30000;
 // How many earlier personas the web page can bring back.
 const PERSONA_VERSIONS = 10;
 // How many models that passed their trial call the web page's picker lists first.
@@ -1134,8 +1134,21 @@ export class Resident extends Think<Env> {
       });
     }
     if (this.webFetchOn()) tools.web_fetch = webFetchTool(readerFor(this.cfg, this.compressor(), this.pageCache(), this.siteKeys().all()));
-    Object.assign(tools, this.stickerTools(), this.voiceTools(), this.taskTools(), this.alarmTools(), this.mcpManageTools(), this.mcpTools());
+    Object.assign(tools, this.stickerTools(), this.voiceTools(), this.taskTools(), this.alarmTools(), this.ownPersonaTools(), this.mcpManageTools(), this.mcpTools());
     return tools;
+  }
+
+  /** edit_persona, when PERSONA_EDIT is on: the persona the web page edits, saved the same way. */
+  private ownPersonaTools(): ToolSet {
+    if (this.cfg.PERSONA_EDIT?.trim().toLowerCase() !== "on") return {};
+    return personaTools({
+      current: () => this.personas(1)[0]?.text || DEFAULT_PERSONA,
+      save: (text) => {
+        this.savePersona(text);
+        this.addNotice("它自己改了人设");
+      },
+      blocked: () => (this.#letterPromptId ? "Not changed: not while writing a letter." : null)
+    });
   }
 
   // ---- alarms it sets itself (alarms.ts) ----
@@ -4341,11 +4354,14 @@ export class Resident extends Think<Env> {
   async webSetPersona(text: string): Promise<WebPersona | { error: string }> {
     const persona = text.trim();
     if (persona.length > PERSONA_MAX_CHARS) return { error: `人设最多 ${PERSONA_MAX_CHARS} 字` };
-    if (persona !== (this.personas(1)[0]?.text ?? "")) {
-      this.sql`INSERT INTO res_persona (at, text) VALUES (${Date.now()}, ${persona})`;
-      this.sql`DELETE FROM res_persona WHERE rowid NOT IN (SELECT rowid FROM res_persona ORDER BY rowid DESC LIMIT ${PERSONA_VERSIONS + 1})`;
-    }
+    if (persona !== (this.personas(1)[0]?.text ?? "")) this.savePersona(persona);
     return this.webPersona();
+  }
+
+  /** A new persona, from the web page or edit_persona; the ones before it stay as earlier versions. */
+  private savePersona(text: string): void {
+    this.sql`INSERT INTO res_persona (at, text) VALUES (${Date.now()}, ${text})`;
+    this.sql`DELETE FROM res_persona WHERE rowid NOT IN (SELECT rowid FROM res_persona ORDER BY rowid DESC LIMIT ${PERSONA_VERSIONS + 1})`;
   }
 
   /** The settings page: each setting, what is saved there and what the Worker has. Secrets only say whether they are set. */
