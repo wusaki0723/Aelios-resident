@@ -92,6 +92,7 @@ import {
   sendMedia,
   sendDocument,
   sendVoice,
+  setMenu,
   setWebhook,
   splitIntoBubbles,
   timingSafeEqual,
@@ -452,6 +453,11 @@ const STICKER_MARK = /\[sticker [^\]]*\]\n?/;
 // How much of a quoted message goes along.
 const QUOTE_MAX = 120;
 
+/** Which bot's menu button was set to open which page: the bot's id (the token's public part) and the page. */
+function menuMark(token: string, page: string): string {
+  return `${token.split(":")[0]} ${page}`;
+}
+
 /** "0:12" → 12. */
 function secondsOf(clockText: string): number {
   const [minutes, seconds] = clockText.split(":").map(Number);
@@ -649,6 +655,8 @@ export class Resident extends Think<Env> {
     } catch (error) {
       console.error("startup: alarm restoration failed; durable alarms retained for retry", kind(error));
     }
+    // Not waited for: the first request should not wait on Telegram.
+    this.ctx.waitUntil(this.repairMenuButton().catch((error) => console.error("startup: menu button check failed", kind(error))));
   }
 
   get tz(): string {
@@ -4477,23 +4485,46 @@ export class Resident extends Think<Env> {
     if ("error" in me) return { result: { getMe: { ok: false, description: me.error } }, error: `Telegram 不认这个 token：${me.error}` };
     this.saveSetting("tg:bot", JSON.stringify({ username: me.username }));
     let secret = this.cfg.TG_WEBHOOK_SECRET?.trim();
+    const made = !secret;
     if (!secret) {
       // Made here and kept with the settings, never shown: only Telegram and the Worker's check need it.
       secret = Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, "0")).join("");
       this.storeConfig("TG_WEBHOOK_SECRET", secret);
-      this.restartSoon("a Telegram webhook secret was made");
     }
     // Telegram only opens Mini Apps from https; over http (local tests) the menu button is left alone.
     const https = origin.startsWith("https:");
     try {
       const result = await setWebhook(config, `${origin}${TELEGRAM_WEBHOOK_PATH}`, secret, https ? { miniAppUrl: residentPage(origin) } : {});
       if (!https) result.setChatMenuButton = { skipped: "the Mini App needs https; open the settings page on the https address" };
+      if ((result.setChatMenuButton as { ok?: boolean } | undefined)?.ok) this.saveSetting("tg:menu", menuMark(config.token, residentPage(origin)));
       const hook = result.setWebhook as { ok?: boolean; description?: string } | undefined;
       return hook?.ok ? { result } : { result, error: `Telegram 没接受这个地址：${hook?.description ?? "setWebhook 失败"}` };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return { result: { setWebhook: { ok: false, description: reason } }, error: `连不上 Telegram：${reason}` };
+    } finally {
+      // Only once Telegram has been told everything: starting again cuts off what is still being asked of it,
+      // the menu button last of all.
+      if (made) this.restartSoon("a Telegram webhook secret was made");
     }
+  }
+
+  /**
+   * The commands and the menu button that opens the web page, for a bot connected here before there was one, or
+   * cut off while being connected: set when the resident starts, once for each bot and address, and only while the
+   * bot's updates come here (a bot moved to another resident keeps that one's button).
+   */
+  private async repairMenuButton(): Promise<void> {
+    const config = this.telegramConfig();
+    const origin = await this.ctx.storage.get<string>("origin");
+    if (!config.token || !origin?.startsWith("https:")) return;
+    const page = residentPage(origin);
+    if (this.settings("tg:menu")?.value === menuMark(config.token, page)) return;
+    const hook = await webhookInfo(config);
+    if ("error" in hook || hook.url !== `${origin}${TELEGRAM_WEBHOOK_PATH}`) return;
+    const menu = (await setMenu(config, page)).setChatMenuButton;
+    if (menu?.ok) this.saveSetting("tg:menu", menuMark(config.token, page));
+    else console.error("tg: menu button not set", { description: menu?.description });
   }
 
   /** The bot the token belongs to, as Telegram last said. */

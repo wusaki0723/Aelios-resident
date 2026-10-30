@@ -154,7 +154,7 @@ Telegram（选装）──▶ Worker（验 secret、白名单、命令）──�
 - 每条消息前面带着你那边的时间，它知道现在几点。
 - 你发的图它看得到（照片，或当文件发的图，20 MB 以内）。有 Cloudflare Images 时（`wrangler.jsonc` 里的 `IMAGES` 绑定，每月 5000 张以内免费），长边超过 1568 像素的图先缩到 1568 再发给模型，模型本来也是按这个大小看的。没有 Images 时图原样发，3.75 MB 以内（编码后 5 MB，Claude 一张图的上限）。
 
-**Mini App**：点 bot 左下角的菜单按钮，网页门直接在 Telegram 里打开，不用填 `WEB_KEY`。它凭 Telegram 签过名的身份进门，每次都按「谁能在 Telegram 上跟它说话」重新查一遍，把人从名单里拿掉就进不来了。换了自定义域名的话，从新域名打开设置页，在「聊天渠道」的 Telegram 卡上点「重新接一次」（Telegram 只开 https 的 Mini App）。细节见 `src/mini-app.ts`。
+**Mini App**：点 bot 左下角的菜单按钮，网页门直接在 Telegram 里打开，不用填 `WEB_KEY`。它凭 Telegram 签过名的身份进门，每次都按「谁能在 Telegram 上跟它说话」重新查一遍，把人从名单里拿掉就进不来了。换了自定义域名的话，从新域名打开设置页，在「聊天渠道」的 Telegram 卡上点「重新接一次」（Telegram 只开 https 的 Mini App）。哪个 bot 没有菜单按钮的话，住户下次启动时（比如重新部署之后）会自己补上；Telegram 可能要退出聊天再进来才显示。细节见 `src/mini-app.ts`。
 
 **命令**：
 
