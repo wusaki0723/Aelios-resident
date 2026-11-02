@@ -458,6 +458,12 @@ function menuMark(token: string, page: string): string {
   return `${token.split(":")[0]} ${page}`;
 }
 
+/** Whether both of `setMenu`'s steps went through: the commands and the menu button. One of them failing means the
+ * mark is not set, so the next start asks Telegram again instead of leaving the commands undone for good. */
+function menuSet(result: { setMyCommands?: unknown; setChatMenuButton?: unknown }): boolean {
+  return Boolean((result.setMyCommands as { ok?: boolean } | undefined)?.ok) && Boolean((result.setChatMenuButton as { ok?: boolean } | undefined)?.ok);
+}
+
 /** "0:12" → 12. */
 function secondsOf(clockText: string): number {
   const [minutes, seconds] = clockText.split(":").map(Number);
@@ -4496,7 +4502,7 @@ export class Resident extends Think<Env> {
     try {
       const result = await setWebhook(config, `${origin}${TELEGRAM_WEBHOOK_PATH}`, secret, https ? { miniAppUrl: residentPage(origin) } : {});
       if (!https) result.setChatMenuButton = { skipped: "the Mini App needs https; open the settings page on the https address" };
-      if ((result.setChatMenuButton as { ok?: boolean } | undefined)?.ok) this.saveSetting("tg:menu", menuMark(config.token, residentPage(origin)));
+      if (menuSet(result)) this.saveSetting("tg:menu", menuMark(config.token, residentPage(origin)));
       const hook = result.setWebhook as { ok?: boolean; description?: string } | undefined;
       return hook?.ok ? { result } : { result, error: `Telegram 没接受这个地址：${hook?.description ?? "setWebhook 失败"}` };
     } catch (error) {
@@ -4522,9 +4528,9 @@ export class Resident extends Think<Env> {
     if (this.settings("tg:menu")?.value === menuMark(config.token, page)) return;
     const hook = await webhookInfo(config);
     if ("error" in hook || hook.url !== `${origin}${TELEGRAM_WEBHOOK_PATH}`) return;
-    const menu = (await setMenu(config, page)).setChatMenuButton;
-    if (menu?.ok) this.saveSetting("tg:menu", menuMark(config.token, page));
-    else console.error("tg: menu button not set", { description: menu?.description });
+    const menu = await setMenu(config, page);
+    if (menuSet(menu)) this.saveSetting("tg:menu", menuMark(config.token, page));
+    else console.error("tg: menu and commands not set", { commands: menu.setMyCommands.description, description: menu.setChatMenuButton?.description });
   }
 
   /** The bot the token belongs to, as Telegram last said. */

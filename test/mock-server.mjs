@@ -178,6 +178,11 @@ const server = http.createServer(async (req, res) => {
       faults.menuButton = true;
       return reply({ ok: false, error_code: 500, description: "Internal Server Error" }, 500);
     }
+    // faults.commands false: Telegram turns the commands down once, as when the call failed on its side.
+    if (method === "setMyCommands" && faults.commands === false) {
+      faults.commands = true;
+      return reply({ ok: false, error_code: 500, description: "Internal Server Error" }, 500);
+    }
     const chat = { id: Number(json?.chat_id ?? 42), type: "private" };
     const message = () => ({ message_id: nextMessageId++, date: Math.floor(Date.now() / 1000), chat, text: json?.text });
     switch (method) {

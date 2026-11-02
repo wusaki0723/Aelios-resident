@@ -29,6 +29,9 @@ const compiled = await build({
         #letterState = null;
         #alarmStore = null;
         constructor(public sql, public cfg, public ctx, public mcp, public schedule, public cancelSchedule) {}
+        // The menu-button repair onStart starts and does not wait for (src/resident.ts repairMenuButton): it talks
+        // to Telegram, which these recovery tests have none of. A stub keeps what they do check unchanged.
+        repairMenuButton() { return Promise.resolve(); }
         ${["onStart", "letterJob", "saveLetterJob", "letterState", "armLetterDelivery", "alarms", "armAlarm"].map(method).join("\n")}
       }
     `,
@@ -80,6 +83,8 @@ function fixture(t) {
         put: async (key, value) => { kv.set(key, value); },
         delete: async (key) => kv.delete(key),
       },
+      // What onStart starts without waiting for; the stub resolves at once, and onStart logs any failure itself.
+      waitUntil: () => {},
     }, mcp, schedule, async (id) => { cancelled.push(id); return true; });
   };
   t.after(() => { db?.close(); rmSync(dir, { recursive: true, force: true }); });

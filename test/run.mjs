@@ -37,7 +37,8 @@
 //   menu     the bot's commands and menu button over https (start wrangler with --var TG_BOT_TOKEN:
 //            --var TG_WEBHOOK_SECRET: --local-upstream resident.test --upstream-protocol https): not cut off by
 //            starting again when Telegram is slow, set when the resident starts if it never was (once, another
-//            resident's too), and not for a bot whose updates go somewhere else
+//            resident's too, and the commands again when Telegram turned those down), and not for a bot whose
+//            updates go somewhere else
 //   residents  more than one resident (src/residents.ts): added and listed, its own addresses under /r/<id>, its
 //            own settings, conversation, Aelios identity, Telegram bot, avatar and task reports, one push key for
 //            all, deleted and added again empty
@@ -2742,6 +2743,21 @@ if (phase === "menu") {
     await restarted("/r/mochi/web/check");
     await sleep(1500);
     assert.equal((await menus(bot(4))).length, 1, "only the one turned down while connecting");
+  });
+
+  await step("commands turned down while connecting are set when the resident starts again", async () => {
+    await fault({ commands: false });
+    assert.equal((await web("/web/config", KEY, { key: "TG_BOT_TOKEN", text: bot(5) })).status, 200);
+    assert.equal(await commands(bot(5)), 1, "asked for while connecting, and turned down");
+    assert.deepEqual(await menus(bot(5)), [`${SITE}/`], "the menu button itself went through");
+    await restarted("/web/check");
+    await soon(async () => (await commands(bot(5))) === 2);
+    assert.equal(await commands(bot(5)), 2, "both set again when it starts, since the commands never went through");
+    assert.deepEqual(await menus(bot(5)), [`${SITE}/`, `${SITE}/`]);
+    await restarted("/web/check");
+    await sleep(1500);
+    assert.equal(await commands(bot(5)), 2, "both went through then: not asked again");
+    assert.equal((await menus(bot(5))).length, 2);
   });
 }
 
