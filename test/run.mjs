@@ -707,6 +707,7 @@ if (phase === "main") {
     // Added at the end of the default line, then a piece of it replaced: each one an earlier version.
     assert.match(await say("人设加一句：你叫麻薯。"), /"saved":true/);
     assert.equal((await persona()).text, `${fallback}\n\n你叫麻薯。`);
+    assert.equal((await persona()).versions[0].text, fallback, "the default line it started from is kept as an earlier version");
     assert.match(await say("人设改成：你叫麻薯。=>你叫团子。"), /"saved":true/);
     const changed = await persona();
     assert.equal(changed.text, `${fallback}\n\n你叫团子。`);
@@ -717,8 +718,15 @@ if (phase === "main") {
     assert.match(await say("人设加一句：我住在 Claude Code 里。"), /Not changed: Some Claude API keys/);
     assert.match(await say(`人设改成：${fallback}\n\n你叫团子。=>`), /Not changed: That would leave your persona empty/);
     assert.equal((await persona()).text, `${fallback}\n\n你叫团子。`, "nothing refused was saved");
-    const notices = (await (await web("/web/messages", "test-web-key")).json()).data.filter((line) => line.kind === "notice" && line.text === "它自己改了人设");
-    assert.equal(notices.length, 2, "a line in the chat for each change");
+    const notices = async () => ((await (await web("/web/messages", "test-web-key")).json()).data.filter((line) => line.kind === "notice" && line.text === "它自己改了人设")).length;
+    assert.equal(await notices(), 2, "a line in the chat for each change");
+    // Cleared back to the default line, then changed from there: the default line stays recoverable as well.
+    await web("/web/persona", "test-web-key", { text: "" });
+    assert.match(await say("人设加一句：你叫年糕。"), /"saved":true/);
+    const cleared = await persona();
+    assert.equal(cleared.text, `${fallback}\n\n你叫年糕。`);
+    assert.equal(cleared.versions[0].text, fallback, "the default line is an earlier version after a clear too");
+    assert.equal(await notices(), 3, "a line for that change too");
     // Off again: the tool is gone, the persona it wrote stays.
     await web("/web/config", "test-web-key", { key: "PERSONA_EDIT", text: "" });
     assert.match(await say("改人设工具在吗"), /没有 edit_persona/);

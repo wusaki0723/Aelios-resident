@@ -1144,6 +1144,9 @@ export class Resident extends Think<Env> {
     return personaTools({
       current: () => this.personas(1)[0]?.text || DEFAULT_PERSONA,
       save: (text) => {
+        // The default line is not a saved persona: on the first change away from it, keep it as an earlier version,
+        // so the page's "bring it back" has something to bring back (the panel promises it).
+        if (!(this.personas(1)[0]?.text ?? "").trim()) this.savePersona(DEFAULT_PERSONA);
         this.savePersona(text);
         this.addNotice("它自己改了人设");
       },
