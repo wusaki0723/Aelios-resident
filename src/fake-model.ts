@@ -186,6 +186,16 @@ function decide(options: LanguageModelV4CallOptions): { text: string; delayMs?: 
     const names = (options.tools ?? []).filter((t) => t.type === "function" && /alarm/.test(t.name)).map((t) => t.name);
     return { text: names.join("|") || "没有闹钟工具。" };
   }
+  // Its own persona (persona-edit.ts): whether it was given edit_persona, a line added at the end, a piece replaced.
+  if (said.includes("改人设工具在吗")) {
+    const named = (options.tools ?? []).some((t) => t.type === "function" && t.name === "edit_persona");
+    return { text: named ? "有 edit_persona。" : "没有 edit_persona。" };
+  }
+  if (said.includes("人设加一句：")) return { tool: "edit_persona", input: { new_text: said.split("人设加一句：")[1] } };
+  if (said.includes("人设改成：")) {
+    const [oldText, newText] = said.split("人设改成：")[1].split("=>");
+    return { tool: "edit_persona", input: { old_text: oldText, new_text: newText } };
+  }
   if (said.includes("等会儿提醒我喝水")) return { tool: "set_alarm", input: { note: "提醒她喝水", in_minutes: 40 } };
   if (said.includes("每天早上叫我")) return { tool: "set_alarm", input: { note: "叫她起床", repeat: "every day at 09:00" } };
   if (said.includes("看看闹钟")) return { tool: "list_alarms", input: {} };

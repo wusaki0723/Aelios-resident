@@ -244,7 +244,7 @@ function resident() {
   var TOOL_WORDS = {
     memory_recall: '翻了记忆', memory_remember: '记下了', memory_notebook: '翻了小本本', memory_forget: '忘掉了', memory_keep_moment: '存了一刻',
     web_search: '搜了网', web_fetch: '读了网页', make_sticker: '画了表情包', send_sticker: '发了表情包', send_voice: '发了语音', cloud_task: '交给线程',
-    set_alarm: '定了闹钟', list_alarms: '看了闹钟', cancel_alarm: '取消了闹钟', mcp_connect: '接了工具'
+    set_alarm: '定了闹钟', list_alarms: '看了闹钟', cancel_alarm: '取消了闹钟', mcp_connect: '接了工具', edit_persona: '改了人设'
   };
   var USAGE_SPANS = [{ key: 'today', label: '今天' }, { key: 'week', label: '7 天' }, { key: 'month', label: '30 天' }];
 
@@ -383,6 +383,8 @@ function resident() {
     siteBusy: '',
     siteError: '',
     STICKER_META: { key: 'STICKERS', label: '发表情包', def: 'on' },
+    // On the persona page, not in a settings section: whether it may change its own persona (edit_persona).
+    PERSONA_EDIT_META: { key: 'PERSONA_EDIT', label: '让它自己改', def: 'off' },
     stickers: { on: true, packs: [], left: 0 },
     cloud: { on: false, configured: false, mode: 'off', origin: '', prompt: '', github: { on: false, repo: '', url: '', problem: '', tokenPage: '' }, today: 0, limit: 10, tasks: [], roles: [] },
     // The role being written: its name, how it works, and its model ('' the threads' own, '…' one written in own).
@@ -2016,6 +2018,8 @@ function resident() {
         this.notify(error.message);
         return;
       }
+      // Its switch (PERSONA_EDIT) is a setting: opened from the chat, the settings may not be read yet.
+      if (!this.field('PERSONA_EDIT')) try { this.config = await this.api('/web/config'); this.fillDrafts(); } catch (e) {}
       this.personaDraft = this.persona.text;
       this.view = 'persona';
       this.$nextTick(function () {
@@ -2141,7 +2145,8 @@ function resident() {
         var meta = CONFIG_GROUPS[i].fields.find(function (m) { return m.key === key; });
         if (meta) return meta;
       }
-      return key === 'STICKERS' ? this.STICKER_META : { key: key };
+      if (key === 'STICKERS') return this.STICKER_META;
+      return key === 'PERSONA_EDIT' ? this.PERSONA_EDIT_META : { key: key };
     },
     groupOf(id) {
       return CONFIG_GROUPS.find(function (g) { return g.id === id; }) || null;
