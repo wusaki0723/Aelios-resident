@@ -30,6 +30,16 @@
     { "tag": "v1", "new_sqlite_classes": ["Resident"] },
     { "tag": "v2", "new_sqlite_classes": ["ClaudeBox"] }
   ],
+  // Each branch Preview has its own Resident namespace; no production script_name.
+  // Preview bindings are explicit rather than inherited from the production Worker.
+  "previews": {
+    "durable_objects": {
+      "bindings": [{ "name": "RESIDENT", "class_name": "Resident" }]
+    },
+    "ai": { "binding": "AI" },
+    "browser": { "binding": "BROWSER" },
+    "images": { "binding": "IMAGES" }
+  },
   "observability": { "enabled": true }
   // No "vars" here on purpose: a value written in this file would overwrite what you set in the
   // Dashboard on every push. Every setting has a default in the code; set the ones you need in
