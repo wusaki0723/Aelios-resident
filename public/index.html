@@ -295,9 +295,9 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
                   </template>
                   <div class="sub" x-show="task.chosen" x-text="'你选了：' + task.chosen"></div>
                   <div class="acts">
-                    <button class="icon-btn sm" type="button" x-show="!task.test && task.runs !== 'desktop'" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
-                    <button class="btn small" type="button" x-show="task.runs === 'desktop'" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)" x-text="desktop ? '查看 DSH 执行过程' : '请在原设备的 DSH 中查看执行过程'"></button>
-                    <span class="sub" role="alert" x-show="task.runs === 'desktop' && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
+                    <button class="icon-btn sm" type="button" x-show="!task.test && !inDsh(task)" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                    <button class="btn small" type="button" x-show="inDsh(task)" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)">查看 DSH 执行过程</button>
+                    <span class="sub" role="alert" x-show="inDsh(task) && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
                     <template x-if="task.waiting"><button class="icon-btn sm end" type="button" :disabled="Boolean(choosing)" @click="settle(task)" title="不用了" aria-label="不用了"><i class="i i-x" aria-hidden="true"></i></button></template>
                   </div>
                 </div>
@@ -708,7 +708,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
     <p class="status-line" x-show="threads.loaded && !threads.on">后台帮忙关着。去 设置 → 后台帮忙 打开，它才会把活交给线程。</p>
     <p class="status-line" role="alert" x-show="desktopError" x-text="desktopError"></p>
     <template x-for="item in threadsIn('open')" :key="item.id">
-      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openTaskThread(item)" :title="item.runs === 'desktop' ? '查看 DSH 执行过程' : '打开线程'">
+      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openTaskThread(item)" :title="inDsh(item) ?'查看 DSH 执行过程' : '打开线程'">
         <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="taskPill(stateOf(item))" x-text="taskStatusText(stateOf(item), item.runs)"></span></span>
         <template x-if="item.status === 'sent' || item.status === 'working'"><span class="track" aria-hidden="true"><span></span></span></template>
         <span class="sub"><span x-text="runsText(item.runs) + ' · ' + item.tasks + ' 单'"></span><span x-text="fmt(item.updatedAt)"></span></span>
@@ -717,7 +717,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
     <p class="group-title" x-show="threadsIn('done').length">做完的</p>
     <div class="list" x-show="threadsIn('done').length">
       <template x-for="item in threadsIn('done')" :key="item.id">
-        <button class="li" type="button" @click="openTaskThread(item)" :title="item.runs === 'desktop' ? '查看 DSH 执行过程' : '打开线程'">
+        <button class="li" type="button" @click="openTaskThread(item)" :title="inDsh(item) ?'查看 DSH 执行过程' : '打开线程'">
           <span class="pill" :class="taskPill(stateOf(item))" style="height: 8px; width: 8px; padding: 0; background: currentColor" aria-hidden="true"></span>
           <span class="name" x-text="item.title"></span>
           <span class="val" x-text="taskStatusText(stateOf(item), item.runs) + ' · ' + fmt(item.updatedAt)"></span>
@@ -1077,9 +1077,9 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
                     <div class="top-line"><span class="t" x-text="task.title"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task), task.runs)"></span></div>
                     <p class="hint" x-show="task.summary || task.progress" x-text="task.summary || task.progress"></p>
                     <div class="choices">
-                      <button class="icon-btn sm" type="button" x-show="!task.test && task.runs !== 'desktop'" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
-                      <button class="btn small" type="button" x-show="task.runs === 'desktop'" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)" x-text="desktop ? '查看 DSH 执行过程' : '请在原设备的 DSH 中查看执行过程'"></button>
-                      <span class="sub" role="alert" x-show="task.runs === 'desktop' && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
+                      <button class="icon-btn sm" type="button" x-show="!task.test && !inDsh(task)" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                      <button class="btn small" type="button" x-show="inDsh(task)" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)">查看 DSH 执行过程</button>
+                      <span class="sub" role="alert" x-show="inDsh(task) && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
                       <template x-for="link in taskLinks(task)" :key="link.url"><a class="btn small" :href="link.url" target="_blank" rel="noopener noreferrer" x-text="link.text"></a></template>
                     </div>
                   </div>

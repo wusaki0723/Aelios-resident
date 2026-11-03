@@ -194,6 +194,24 @@ await test('queued expiry does not run a task, queue bounded, and uncertain jobs
   } finally { Date.now = original; }
 });
 
+await test('a lost claim answer or an uncertain job never holds the device or its thread', async () => {
+  const f = await paired(), lost = f.add();
+  await f.devices.request(f.registration.token, 'claim', {}); // its answer never reaches the device
+  const next = f.add(), original = Date.now;
+  try {
+    let now = original();
+    Date.now = () => now;
+    for (let beat = 0; beat < 3; beat++) { now += 2 * 60_000; await f.devices.request(f.registration.token, 'heartbeat', {}); }
+    assert.equal(f.db.prepare('SELECT state FROM res_desktop_jobs WHERE job_id = ?').get(lost.id).state, 'unknown', 'heartbeats do not keep an unstarted claim');
+    assert.equal((await f.devices.request(f.registration.token, 'claim', {})).job.id, next.id, 'the next job is still claimed');
+    assert.ok(f.add({ follows: lost.id }), 'they can ask to carry on an uncertain thread');
+    const never = f.add();
+    now += 25 * 60 * 60_000;
+    await f.devices.request(f.registration.token, 'heartbeat', {});
+    assert.ok(f.add({ follows: never.id }), 'and one that expired without running');
+  } finally { Date.now = original; }
+});
+
 await test('bounded JSON parser handles binary stream size, content type and malformed objects', async () => {
   const request = (body, headers = {}) => new Request('https://fixture.invalid/desktop/v1/events', { method: 'POST', body, headers: { 'content-type': 'application/json', ...headers }, ...(body instanceof ReadableStream ? { duplex: 'half' } : {}) });
   assert.deepEqual(await device.readDesktopJson(request('{}')), {});

@@ -131,12 +131,12 @@ export class DesktopDeviceStore {
       const device = this.active();
       if (!device) fail(409, "NO_DEVICE", "还没有配对本机设备；本机任务不会改派到云端");
       if (follows?.runs === "desktop" && follows.deviceId !== device.id) fail(409, "DEVICE_CHANGED", "原线程的设备已更换；请明确新建任务，不会把旧线程交给另一台电脑");
-      if (follows?.runs === "desktop") {
-        const previous = this.job(follows.id);
-        if (!previous || !["completed", "failed", "needs_you"].includes(previous.state)) fail(409, "THREAD_BUSY", "原任务的执行结果尚未确认，请先在原设备核实");
+      // An expired or uncertain one does not hold its thread: carrying on is theirs to ask for, after they have looked.
+      if (follows?.runs === "desktop" && ["queued", "claimed", "running"].includes(this.job(follows.id)?.state ?? "")) {
+        fail(409, "THREAD_BUSY", "原任务还在本机排队或执行，等它交回来再接着做");
       }
-      const count = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM res_desktop_jobs WHERE state IN ('queued', 'claimed', 'running', 'unknown')`[0]?.n ?? 0;
-      if (count >= MAX_PENDING) fail(429, "QUEUE_FULL", "本机待确认任务已满，请先处理原有任务");
+      const count = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM res_desktop_jobs WHERE state IN ('queued', 'claimed', 'running')`[0]?.n ?? 0;
+      if (count >= MAX_PENDING) fail(429, "QUEUE_FULL", "本机排队的任务已满，等前面的交回来再派");
       this.sql`INSERT INTO res_desktop_jobs VALUES (${task.id}, ${device.id}, ${""}, ${0}, ${"queued"}, ${null}, ${Date.now()}, ${""})`;
       this.sql`UPDATE res_tasks SET desktop_device_id = ${device.id}, progress = ${"等待已授权设备领取"} WHERE id = ${task.id}`;
       return this.tasks.get(task.id)!;
@@ -172,10 +172,12 @@ export class DesktopDeviceStore {
       if (Object.keys(body).length) fail(400, "INVALID_BODY", "心跳和领取不接受任务、路径或命令参数");
       this.sql`UPDATE res_desktop_devices SET last_seen_at = ${Date.now()} WHERE id = ${device.id}`;
       if (action === "heartbeat") {
-        this.sql`UPDATE res_desktop_jobs SET lease_until = ${Date.now() + LEASE_MS} WHERE device_id = ${device.id} AND state IN ('claimed', 'running')`;
+        // Only a started job: a claim whose answer was lost never starts, so it lapses to unknown instead of holding the device.
+        this.sql`UPDATE res_desktop_jobs SET lease_until = ${Date.now() + LEASE_MS} WHERE device_id = ${device.id} AND state = 'running'`;
         return { ok: true, protocol: DESKTOP_PROTOCOL };
       }
-      if (this.sql<Job>`SELECT * FROM res_desktop_jobs WHERE device_id = ${device.id} AND state IN ('claimed', 'running', 'unknown') LIMIT 1`.length) return { job: null };
+      // An unknown job is not rerun, and does not stop the ones after it either.
+      if (this.sql<Job>`SELECT * FROM res_desktop_jobs WHERE device_id = ${device.id} AND state IN ('claimed', 'running') LIMIT 1`.length) return { job: null };
       const job = this.sql<Job>`SELECT * FROM res_desktop_jobs WHERE device_id = ${device.id} AND state = 'queued' ORDER BY created_at, rowid LIMIT 1`[0];
       if (!job) return { job: null };
       const task = this.tasks.get(job.job_id);

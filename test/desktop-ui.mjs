@@ -59,9 +59,11 @@ test('source contract: original cards navigate by explicit click; desktop jobs b
   assert.ok(html.indexOf('src="/desktop.js"') < html.indexOf('src="/app.js"'));
   assert.match(html, /@click="openDesktopTask\(task\)"/);
   assert.match(html, /查看 DSH 执行过程/);
-  assert.match(html, /x-show="!task\.test && task\.runs !== 'desktop'"/);
+  assert.match(html, /x-show="!task\.test && !inDsh\(task\)"/);
   assert.equal((html.match(/@click="openTaskThread\(item\)"/g) || []).length, 2);
-  assert.match(app, /task\.runs === 'desktop' \? this\.openDesktopTask\(task\) : this\.openThread\(task\.id\)/);
+  assert.match(app, /this\.inDsh\(task\) \? this\.openDesktopTask\(task\) : this\.openThread\(task\.id\)/);
+  // On an ordinary page (a browser, a phone) a desktop job's thread opens like any other.
+  assert.match(app, /return Boolean\(desktop\) && task\.runs === 'desktop';/);
   assert.equal((app.match(/desktopUI\.open\(/g) || []).length, 1);
   assert.match(html, /role="alert" x-show="desktopError"/);
 });

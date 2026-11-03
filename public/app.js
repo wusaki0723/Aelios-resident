@@ -1902,12 +1902,17 @@ function resident() {
         if (on === this.resident) { this.desktopError = error.message; this.notify(error.message); }
       } finally { this.desktopOpening = ''; }
     },
+    // A job on their computer opens its DSH session inside DSH; anywhere else its thread opens like any other.
+    inDsh(task) {
+      return Boolean(desktop) && task.runs === 'desktop';
+    },
     openTaskThread(task) {
-      return task.runs === 'desktop' ? this.openDesktopTask(task) : this.openThread(task.id);
+      return this.inDsh(task) ? this.openDesktopTask(task) : this.openThread(task.id);
     },
     async openThread(id) {
       if (!id) return;
-      var desktopTask = this.threads.threads.find(function (task) { return task.id === id && task.runs === 'desktop'; });
+      var self = this;
+      var desktopTask = this.threads.threads.find(function (task) { return task.id === id && self.inDsh(task); });
       if (desktopTask) return this.openDesktopTask(desktopTask);
       if (this.thread.id !== id) {
         this.thread = emptyThread();
