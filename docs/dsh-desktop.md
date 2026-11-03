@@ -1,6 +1,6 @@
 # 在 DSH 中使用 Resident 与本机帮手
 
-这是原生 DSH 集成的开发版说明。插件独立维护，包名为 `@aelios/dsh-resident`，当前开发版本为 `0.2.0`；源码目录名为 `dsh-plugin-aelios-resident`。它不包含在 Resident Worker 的部署产物中，目前不应假定已有公开 npm 安装包或已发布的独立 GitHub 仓库。
+这是原生 DSH 集成的开发版说明。[独立插件源码](https://github.com/Aelios-project/dsh-plugin-aelios-resident)目前为组织私有仓库，包名为 `@aelios/dsh-resident`，当前开发版本为 `0.2.0`；源码目录名为 `dsh-plugin-aelios-resident`。它不包含在 Resident Worker 的部署产物中，也尚未发布到公开 npm。
 
 ## 平时看到什么
 
