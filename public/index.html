@@ -22,7 +22,7 @@
 </script>
 <script>
 // Ordinary WEB_KEY pages stay entirely local. Load Telegram's bridge only on a Mini App launch.
-window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Promise(function (resolve) {
+window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protocol === 'resident-dsh/1') && /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Promise(function (resolve) {
   var script = document.createElement('script');
   script.src = 'https://telegram.org/js/telegram-web-app.js';
   script.onload = function () { resolve(true); };
@@ -34,40 +34,71 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
 <link rel="stylesheet" href="/app.css">
 <script src="/markdown.js"></script>
 <script src="/group.js"></script>
+<script src="/desktop.js"></script>
 <script src="/app.js"></script>
 <script defer src="/vendor/alpine-3.14.9.min.js"></script>
 </head>
 <body>
 <div class="sky" aria-hidden="true"></div>
-<div class="shell" x-data="resident()" x-init="start()" x-cloak>
+<div class="shell" :class="{ 'has-rail': authed && !miniApp && residents.list.length > 0, 'rail-folded': railFolded }" x-data="resident()" x-init="start()" x-cloak>
 
-  <!-- ===== the residents (src/residents.ts): one avatar each, tap to switch; beside the page on a wide screen, a drawer on a phone ===== -->
+  <!-- ===== the residents (src/residents.ts): a drawer on a phone; on a wide screen (a computer's browser, or the
+       DSH panel) a sidebar beside the page, with the page's own tools on top and the resident on the page as a card ===== -->
   <div class="rail-scrim" x-show="residents.open" x-transition.opacity @click="residents.open = false" @keydown.escape.window="residents.open = false"></div>
   <nav class="rail" x-show="authed && !miniApp && residents.list.length" :class="residents.open && 'open'" aria-label="住户们">
+    <div class="rail-head">
+      <span class="rail-brand"><img src="/icon-192.png" alt="" aria-hidden="true"><span>住户</span></span>
+      <button class="icon-btn sm" type="button" @click="openSearch()" aria-label="搜聊天记录" title="搜聊天记录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+      </button>
+      <button class="icon-btn sm" type="button" x-show="cloud.on" @click="openThreads()" :aria-label="'线程' + (workingTasks() ? '，' + workingTasks() + ' 个在路上' : '')" :title="'线程' + (workingTasks() ? '，' + workingTasks() + ' 个在路上' : '')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10"/><path d="M4 12h16"/><path d="M4 17h12"/><circle cx="19" cy="7" r="2"/></svg>
+        <span class="badge-dot small" x-show="workingTasks()" aria-hidden="true"></span>
+      </button>
+      <button class="icon-btn sm" type="button" x-show="residents.list.length - 1 < residents.max" @click="openAddResident()" aria-label="新住户" title="新住户">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg>
+      </button>
+      <button class="icon-btn sm" type="button" @click="foldRail()" aria-label="收起侧栏" title="收起侧栏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg>
+      </button>
+    </div>
+    <button class="rail-current" type="button" :class="view === 'chat' && 'on'" @click="showChat()" :title="view === 'chat' ? '看看' + identity.name : '回到和' + identity.name + '的聊天'">
+      <span class="avatar">
+        <template x-if="identity.avatar"><img :src="identity.avatar" alt=""></template>
+        <template x-if="!identity.avatar"><span class="initial" x-text="initialOf(identity.name)"></span></template>
+      </span>
+      <span class="name" x-text="identity.name"></span>
+      <span class="tag" :class="replying() && 'live'" x-text="statusText()"></span>
+    </button>
     <template x-for="r in residents.list" :key="r.id">
-      <button class="rail-item" type="button" :class="r.id === resident && view !== 'group' && 'on'" @click="switchResident(r.id)" :title="r.name" :aria-current="r.id === resident ? 'page' : null">
+      <button class="rail-item" type="button" :class="{ on: r.id === resident && view !== 'group', current: r.id === resident }" @click="switchResident(r.id)" :title="r.name" :aria-current="r.id === resident ? 'page' : null">
         <span class="avatar">
           <template x-if="r.avatar"><img :src="r.avatar" alt=""></template>
           <template x-if="!r.avatar"><span class="initial" x-text="initialOf(r.name)"></span></template>
         </span>
         <span class="dot" x-show="residentDot(r)" aria-hidden="true"></span>
-        <span class="label" x-text="r.name"></span>
+        <span class="txt"><span class="label" x-text="r.name"></span><span class="sub" x-text="residentSub(r)"></span></span>
       </button>
     </template>
     <template x-for="g in groups" :key="g.id">
       <button class="rail-item" type="button" :class="view === 'group' && group.id === g.id && 'on'" @click="openGroup(g.id)" :title="g.name">
         <span class="avatar"><template x-if="g.icon"><img :src="g.icon" alt=""></template><template x-if="!g.icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15.5V7a2.5 2.5 0 0 1 2.5-2.5h7A2.5 2.5 0 0 1 16 7v4.5a2.5 2.5 0 0 1-2.5 2.5H8z"/><path d="M19 9.5a2 2 0 0 1 1 1.7v8.3l-3-2.5h-5a2 2 0 0 1-1.7-1"/></svg></template></span>
-        <span class="label" x-text="g.name"></span>
+        <span class="txt"><span class="label" x-text="g.name"></span><span class="sub" x-text="groupSub(g)"></span></span>
       </button>
     </template>
     <button class="rail-item add" type="button" x-show="groupOn() && groups.length < 20" @click="newGroup()" title="新群聊">
       <span class="avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15.5V7a2.5 2.5 0 0 1 2.5-2.5h7A2.5 2.5 0 0 1 16 7v4.5a2.5 2.5 0 0 1-2.5 2.5H8z"/><path d="M10 7v4.5M7.75 9.25h4.5"/><path d="M19 9.5a2 2 0 0 1 1 1.7v8.3l-3-2.5h-5a2 2 0 0 1-1.7-1"/></svg></span>
-      <span class="label">新群聊</span>
+      <span class="txt"><span class="label">新群聊</span></span>
     </button>
-    <button class="rail-item add" type="button" x-show="residents.list.length - 1 < residents.max" @click="openAddResident()" title="新住户">
+    <button class="rail-item add new-resident" type="button" x-show="residents.list.length - 1 < residents.max" @click="openAddResident()" title="新住户">
       <span class="avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></span>
-      <span class="label">新住户</span>
+      <span class="txt"><span class="label">新住户</span></span>
     </button>
+    <div class="rail-foot">
+      <button class="icon-btn sm" type="button" @click="openConfig()" aria-label="设置" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
   </nav>
 
   <!-- ===== the way in ===== -->
@@ -75,8 +106,9 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
     <div class="login">
       <span class="avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="12" cy="9" r="3.5"/><path d="M5.5 19.5c1.3-3.1 3.7-4.7 6.5-4.7s5.2 1.6 6.5 4.7"/></svg></span>
       <h1>住户</h1>
-      <p x-text="miniApp ? '正在确认 Telegram 身份…' : '填网页钥匙进门'"></p>
-      <form x-show="!miniApp" @submit.prevent="login()">
+      <p x-text="desktop ? '正在连接桌面的住民…' : miniApp ? '正在确认 Telegram 身份…' : '填网页钥匙进门'"></p>
+      <button class="btn" x-show="desktop && loginError" type="button" @click="login()">重试连接</button>
+      <form x-show="!miniApp && !desktop" @submit.prevent="login()">
         <label for="web-key">网页钥匙</label>
         <div class="field-box">
           <input id="web-key" x-model="keyInput" :type="showKey ? 'text' : 'password'" autocomplete="current-password" autocapitalize="off" spellcheck="false">
@@ -94,31 +126,37 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
 
   <!-- ===== the conversation ===== -->
   <header class="top" x-show="authed && view === 'chat'">
-    <button class="icon-btn rail-open" type="button" x-show="!miniApp && residents.list.length" @click="residents.open = true" aria-label="住户们" title="住户们">
+    <button class="icon-btn rail-open" type="button" x-show="!miniApp && residents.list.length" @click="openRail()" aria-label="住户们" title="住户们">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       <span class="badge-dot small" x-show="anyResidentDot()" aria-hidden="true"></span>
     </button>
-    <button class="avatar" type="button" @click="openProfile()" :aria-label="'看看' + identity.name">
-      <template x-if="identity.avatar"><img :src="identity.avatar" alt=""></template>
-      <template x-if="!identity.avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="9" r="3.5"/><path d="M5.5 19.5c1.3-3.1 3.7-4.7 6.5-4.7s5.2 1.6 6.5 4.7"/></svg></template>
-    </button>
-    <div class="who">
-      <span class="name" x-text="identity.name"></span>
-      <button class="status" type="button" :class="replying() && 'live'" @click="openPicker()" aria-label="换模型">
-        <span x-text="statusText()"></span>
-        <svg x-show="!replying()" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    <!-- One row on a phone; on a wide screen a pill in the middle of the top. -->
+    <div class="ident">
+      <button class="avatar" type="button" @click="openProfile()" :aria-label="'看看' + identity.name">
+        <template x-if="identity.avatar"><img :src="identity.avatar" alt=""></template>
+        <template x-if="!identity.avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="9" r="3.5"/><path d="M5.5 19.5c1.3-3.1 3.7-4.7 6.5-4.7s5.2 1.6 6.5 4.7"/></svg></template>
+      </button>
+      <div class="who">
+        <span class="name" x-text="identity.name"></span>
+        <button class="status" type="button" :class="replying() && 'live'" @click="openPicker()" aria-label="换模型">
+          <span x-text="statusText()"></span>
+          <svg x-show="!replying()" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+    </div>
+    <!-- On a wide screen these are in the sidebar, and come back here when it is folded away. -->
+    <div class="top-tools">
+      <button class="icon-btn" type="button" @click="openSearch()" aria-label="搜聊天记录" title="搜聊天记录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+      </button>
+      <button class="icon-btn" type="button" x-show="cloud.on" @click="openThreads()" :aria-label="'线程' + (workingTasks() ? '，' + workingTasks() + ' 个在路上' : '')" :title="'线程' + (workingTasks() ? '，' + workingTasks() + ' 个在路上' : '')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10"/><path d="M4 12h16"/><path d="M4 17h12"/><circle cx="19" cy="7" r="2"/></svg>
+        <span class="badge-dot" x-show="workingTasks()" x-text="workingTasks()"></span>
+      </button>
+      <button class="icon-btn" type="button" @click="openConfig()" aria-label="设置" title="设置">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
       </button>
     </div>
-    <button class="icon-btn" type="button" @click="openSearch()" aria-label="搜聊天记录" title="搜聊天记录">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
-    </button>
-    <button class="icon-btn" type="button" x-show="cloud.on" @click="openThreads()" :aria-label="'线程' + (workingTasks() ? '，' + workingTasks() + ' 个在路上' : '')" :title="'线程' + (workingTasks() ? '，' + workingTasks() + ' 个在路上' : '')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10"/><path d="M4 12h16"/><path d="M4 17h12"/><circle cx="19" cy="7" r="2"/></svg>
-      <span class="badge-dot" x-show="workingTasks()" x-text="workingTasks()"></span>
-    </button>
-    <button class="icon-btn" type="button" @click="openConfig()" aria-label="设置" title="设置">
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
-    </button>
   </header>
 
   <main class="chat" x-show="authed && view === 'chat'">
@@ -244,7 +282,7 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
               </template>
               <template x-for="task in row.cards" :key="task.id">
                 <div class="ccard" :class="{ dashed: task.status === 'sent' || task.status === 'working', ask: task.waiting }">
-                  <div class="head"><span>线程</span><span class="spacer"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task))"></span></div>
+                  <div class="head"><span>线程</span><span class="spacer"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task), task.runs)"></span></div>
                   <div class="t" x-text="task.title"></div>
                   <template x-if="task.status === 'sent' || task.status === 'working'"><div class="track" aria-hidden="true"><span></span></div></template>
                   <div class="note" x-show="taskPreview(task)" x-text="taskPreview(task)"></div>
@@ -257,7 +295,9 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
                   </template>
                   <div class="sub" x-show="task.chosen" x-text="'你选了：' + task.chosen"></div>
                   <div class="acts">
-                    <button class="icon-btn sm" type="button" x-show="!task.test" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                    <button class="icon-btn sm" type="button" x-show="!task.test && !inDsh(task)" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                    <button class="btn small" type="button" x-show="inDsh(task)" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)">查看 DSH 执行过程</button>
+                    <span class="sub" role="alert" x-show="inDsh(task) && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
                     <template x-if="task.waiting"><button class="icon-btn sm end" type="button" :disabled="Boolean(choosing)" @click="settle(task)" title="不用了" aria-label="不用了"><i class="i i-x" aria-hidden="true"></i></button></template>
                   </div>
                 </div>
@@ -666,9 +706,10 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
   </header>
   <section class="page" x-show="authed && view === 'threads'">
     <p class="status-line" x-show="threads.loaded && !threads.on">后台帮忙关着。去 设置 → 后台帮忙 打开，它才会把活交给线程。</p>
+    <p class="status-line" role="alert" x-show="desktopError" x-text="desktopError"></p>
     <template x-for="item in threadsIn('open')" :key="item.id">
-      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openThread(item.id)">
-        <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="taskPill(stateOf(item))" x-text="taskStatusText(stateOf(item))"></span></span>
+      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openTaskThread(item)" :title="inDsh(item) ?'查看 DSH 执行过程' : '打开线程'">
+        <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="taskPill(stateOf(item))" x-text="taskStatusText(stateOf(item), item.runs)"></span></span>
         <template x-if="item.status === 'sent' || item.status === 'working'"><span class="track" aria-hidden="true"><span></span></span></template>
         <span class="sub"><span x-text="runsText(item.runs) + ' · ' + item.tasks + ' 单'"></span><span x-text="fmt(item.updatedAt)"></span></span>
       </button>
@@ -676,10 +717,10 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
     <p class="group-title" x-show="threadsIn('done').length">做完的</p>
     <div class="list" x-show="threadsIn('done').length">
       <template x-for="item in threadsIn('done')" :key="item.id">
-        <button class="li" type="button" @click="openThread(item.id)">
+        <button class="li" type="button" @click="openTaskThread(item)" :title="inDsh(item) ?'查看 DSH 执行过程' : '打开线程'">
           <span class="pill" :class="taskPill(stateOf(item))" style="height: 8px; width: 8px; padding: 0; background: currentColor" aria-hidden="true"></span>
           <span class="name" x-text="item.title"></span>
-          <span class="val" x-text="taskStatusText(stateOf(item)) + ' · ' + fmt(item.updatedAt)"></span>
+          <span class="val" x-text="taskStatusText(stateOf(item), item.runs) + ' · ' + fmt(item.updatedAt)"></span>
         </button>
       </template>
     </div>
@@ -1033,10 +1074,12 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
                 <div class="label"><span>最近的活</span><span class="spacer"></span><span class="pill" x-text="'24 小时内 ' + cloud.today + ' / ' + cloud.limit + ' 单'"></span></div>
                 <template x-for="task in cloud.tasks" :key="task.id">
                   <div class="mini-row">
-                    <div class="top-line"><span class="t" x-text="task.title"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task))"></span></div>
+                    <div class="top-line"><span class="t" x-text="task.title"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task), task.runs)"></span></div>
                     <p class="hint" x-show="task.summary || task.progress" x-text="task.summary || task.progress"></p>
                     <div class="choices">
-                      <button class="icon-btn sm" type="button" x-show="!task.test" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                      <button class="icon-btn sm" type="button" x-show="!task.test && !inDsh(task)" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                      <button class="btn small" type="button" x-show="inDsh(task)" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)">查看 DSH 执行过程</button>
+                      <span class="sub" role="alert" x-show="inDsh(task) && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
                       <template x-for="link in taskLinks(task)" :key="link.url"><a class="btn small" :href="link.url" target="_blank" rel="noopener noreferrer" x-text="link.text"></a></template>
                     </div>
                   </div>

@@ -167,6 +167,8 @@ function decide(options: LanguageModelV4CallOptions): { text: string; delayMs?: 
   // A job with a role from the settings page (task-roles.ts): only what this job needs, the role says the rest.
   if (said.includes("角色线程接着做")) return { tool: "cloud_task", input: { title: "接着干", job: "再看一遍。", execution: "local", follow_up_of: said.match(/t_[0-9a-f]{10}/)?.[0] } };
   if (said.includes("按角色派活")) return { tool: "cloud_task", input: { title: "按角色干", job: "看一下 README。", execution: "local", role: said.split("按角色派活")[1].trim() } };
+  // Synthetic local desktop integration only; the real model never uses this scripted scenario.
+  if (said.includes("桌面只读派活")) return { tool: "cloud_task", input: { title: "本机只读联调", job: "仅列出 DSH 中已授权工作区的条目，不写入或修改任何文件。", execution: "desktop" } };
   if (said.includes("派活")) return { tool: "cloud_task", input: { ...cloudJob("修 README 的错字"), repo: "wusaki0723/aelios-resident" } };
   if (said.includes("接着派")) {
     const earlier = [...prompt.map((m) => textOf(m.content)).join("\n").matchAll(/\bt_[0-9a-f]{10}\b/g)].at(-1)?.[0];

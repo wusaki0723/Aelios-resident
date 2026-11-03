@@ -453,6 +453,8 @@ A thread can run in three places:
 - **GitHub Actions** (for running commands, tests and opening pull requests): a full Linux machine, in a private repository the resident makes on your GitHub account. All it takes is one token.
 - **A claude.ai routine** (with a Claude subscription): each job opens a cloud Claude Code session on your plan. Once connected, jobs go there by default; light reading and writing can still stay on the resident's own threads.
 
+A fourth place, **your own computer**, is in development: through the DSH desktop app, a job goes to a helper that can only list and read one folder you choose, and only when you ask for work on that computer. Its plugin is not public yet, so it cannot be installed for now. How it works and its limits: [docs/dsh-desktop.md](docs/dsh-desktop.md) (in Chinese).
+
 Threads on the resident and on GitHub Actions work on **the threads' model**: Workers AI's `@cf/zai-org/glm-4.7-flash` (within its daily free allowance) unless you pick another under 「线程用哪个模型」 (`CLOUD_TASK_MODEL`). They never use the chat's model on their own, so a costly chat model is not spent on legwork.
 
 The **Threads** (「线程」) button at the top of the chat (also on its page) lists every thread. Open one to see:

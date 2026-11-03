@@ -1435,3 +1435,44 @@ await back.takeBackFromMenu(false);
 assert.deepEqual(takes[1], ['/web/take-back', { id: 'a2', again: false }]);
 console.log('PASS taking back its latest reply from its menu: only the latest and when done, delete asks first, again shows the dots');
 
+
+// The computer layout (app.css from WIDE_SCREEN up, in a browser or the DSH panel): a line under each name in the
+// sidebar, the sidebar folded away and back, and the resident's own card. Below that width it stays the phone's drawer.
+const css = readFileSync('public/app.css', 'utf8');
+assert.ok(css.includes('@media (min-width: 920px)') && code.includes("var WIDE_SCREEN = '(min-width: 920px)'"), 'the script and the style sheet change layout at the same width');
+for (const part of ['class="rail-head"', 'class="rail-current"', '@click="showChat()"', '@click="foldRail()"', '@click="openRail()"', 'class="ident"', 'class="top-tools"', 'x-text="residentSub(r)"', 'x-text="groupSub(g)"']) {
+  assert.ok(html.includes(part), `the page has ${part}`);
+}
+assert.match(css, /\.rail-head, \.rail-current, \.rail-foot, \.rail-item \.sub \{ display: none; \}/, 'the sidebar\'s extras are hidden on a phone');
+assert.match(css, /\.ident, \.top-tools \{ display: contents; \}/, 'the phone\'s top bar keeps its one row');
+const wide = vm.runInContext('testPage()', context);
+wide.scrollSoon = () => {};
+wide.resident = 'default';
+wide.residents.list = [{ id: 'default', name: '住户', avatar: null, saidAt: 5 }, { id: 'b', name: 'B', avatar: null, saidAt: 9 }, { id: 'c', name: 'C', avatar: null, saidAt: 0 }];
+wide.residents.seen = { default: 5, b: 1, c: 0 };
+assert.equal(wide.residentSub(wide.residents.list[1]), '有新消息');
+assert.equal(wide.residentSub(wide.residents.list[2]), '还没说过话');
+wide.residents.seen.b = 9;
+assert.match(wide.residentSub(wide.residents.list[1]), /^上次说话 \d/);
+assert.equal(wide.groupSub({ members: ['default', 'b'] }), '2 个住户的群聊');
+assert.equal(wide.groupSub({}), '群聊');
+context.matchMedia = () => ({ matches: false });
+wide.railFolded = true;
+wide.openRail();
+assert.deepEqual([wide.residents.open, wide.railFolded], [true, true], 'on a phone the button opens the drawer');
+context.matchMedia = () => ({ matches: true });
+wide.residents.open = false;
+wide.railFolded = false;
+wide.foldRail();
+assert.equal(wide.railFolded, true, 'folded away');
+wide.openRail();
+assert.deepEqual([wide.residents.open, wide.railFolded], [false, false], 'on a wide screen the button brings the sidebar back');
+wide.view = 'search';
+wide.showChat();
+assert.equal(wide.view, 'chat', 'the card goes back to its chat');
+let profiled = false;
+wide.openProfile = () => { profiled = true; };
+wide.showChat();
+assert.equal(profiled, true, 'and from the chat it shows who it is');
+delete context.matchMedia;
+console.log('PASS the computer layout: a line under each name, the sidebar folds away and back (a drawer on a phone), the resident\'s card goes to its chat');
