@@ -15,6 +15,9 @@ Follow [docs/setup-with-ai.md](docs/setup-with-ai.md) step by step. It starts fr
 
 ## Working on the code
 
+- Submit changes to this repository on a branch and open a pull request. Do not push directly to `main`, merge a PR, or enable auto-merge unless the user explicitly authorizes that merge.
+- For the proposed DSH integration, read [the spec review and Phase 0 gates](docs/dsh-integration-review.md) before implementation; the proposal is not evidence that UI or ACP capabilities already work.
+
 - Node.js 22+. Install with `npm ci`.
 - Before a PR: `npm run typecheck`, then the tests in [docs/testing.md](docs/testing.md) for the parts you touched. They run against fake Telegram, a fake WeCom relay, fake Aelios and a scripted model, so they cost nothing and need no Cloudflare login.
 - User-facing docs: `README.md` is in English (the default) and `README.zh-CN.md` in Chinese; change both together. `docs/` is in Chinese.
