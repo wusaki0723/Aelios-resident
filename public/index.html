@@ -22,7 +22,7 @@
 </script>
 <script>
 // Ordinary WEB_KEY pages stay entirely local. Load Telegram's bridge only on a Mini App launch.
-window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Promise(function (resolve) {
+window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protocol === 'resident-dsh/1') && /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Promise(function (resolve) {
   var script = document.createElement('script');
   script.src = 'https://telegram.org/js/telegram-web-app.js';
   script.onload = function () { resolve(true); };
@@ -34,6 +34,7 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
 <link rel="stylesheet" href="/app.css">
 <script src="/markdown.js"></script>
 <script src="/group.js"></script>
+<script src="/desktop.js"></script>
 <script src="/app.js"></script>
 <script defer src="/vendor/alpine-3.14.9.min.js"></script>
 </head>
@@ -75,8 +76,9 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
     <div class="login">
       <span class="avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="12" cy="9" r="3.5"/><path d="M5.5 19.5c1.3-3.1 3.7-4.7 6.5-4.7s5.2 1.6 6.5 4.7"/></svg></span>
       <h1>住户</h1>
-      <p x-text="miniApp ? '正在确认 Telegram 身份…' : '填网页钥匙进门'"></p>
-      <form x-show="!miniApp" @submit.prevent="login()">
+      <p x-text="desktop ? '正在连接桌面的住民…' : miniApp ? '正在确认 Telegram 身份…' : '填网页钥匙进门'"></p>
+      <button class="btn" x-show="desktop && loginError" type="button" @click="login()">重试连接</button>
+      <form x-show="!miniApp && !desktop" @submit.prevent="login()">
         <label for="web-key">网页钥匙</label>
         <div class="field-box">
           <input id="web-key" x-model="keyInput" :type="showKey ? 'text' : 'password'" autocomplete="current-password" autocapitalize="off" spellcheck="false">
@@ -244,7 +246,7 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
               </template>
               <template x-for="task in row.cards" :key="task.id">
                 <div class="ccard" :class="{ dashed: task.status === 'sent' || task.status === 'working', ask: task.waiting }">
-                  <div class="head"><span>线程</span><span class="spacer"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task))"></span></div>
+                  <div class="head"><span>线程</span><span class="spacer"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task), task.runs)"></span></div>
                   <div class="t" x-text="task.title"></div>
                   <template x-if="task.status === 'sent' || task.status === 'working'"><div class="track" aria-hidden="true"><span></span></div></template>
                   <div class="note" x-show="taskPreview(task)" x-text="taskPreview(task)"></div>
@@ -257,7 +259,9 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
                   </template>
                   <div class="sub" x-show="task.chosen" x-text="'你选了：' + task.chosen"></div>
                   <div class="acts">
-                    <button class="icon-btn sm" type="button" x-show="!task.test" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                    <button class="icon-btn sm" type="button" x-show="!task.test && task.runs !== 'desktop'" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                    <button class="btn small" type="button" x-show="task.runs === 'desktop'" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)" x-text="desktop ? '查看 DSH 执行过程' : '请在原设备的 DSH 中查看执行过程'"></button>
+                    <span class="sub" role="alert" x-show="task.runs === 'desktop' && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
                     <template x-if="task.waiting"><button class="icon-btn sm end" type="button" :disabled="Boolean(choosing)" @click="settle(task)" title="不用了" aria-label="不用了"><i class="i i-x" aria-hidden="true"></i></button></template>
                   </div>
                 </div>
@@ -666,9 +670,10 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
   </header>
   <section class="page" x-show="authed && view === 'threads'">
     <p class="status-line" x-show="threads.loaded && !threads.on">后台帮忙关着。去 设置 → 后台帮忙 打开，它才会把活交给线程。</p>
+    <p class="status-line" role="alert" x-show="desktopError" x-text="desktopError"></p>
     <template x-for="item in threadsIn('open')" :key="item.id">
-      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openThread(item.id)">
-        <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="taskPill(stateOf(item))" x-text="taskStatusText(stateOf(item))"></span></span>
+      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openTaskThread(item)" :title="item.runs === 'desktop' ? '查看 DSH 执行过程' : '打开线程'">
+        <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="taskPill(stateOf(item))" x-text="taskStatusText(stateOf(item), item.runs)"></span></span>
         <template x-if="item.status === 'sent' || item.status === 'working'"><span class="track" aria-hidden="true"><span></span></span></template>
         <span class="sub"><span x-text="runsText(item.runs) + ' · ' + item.tasks + ' 单'"></span><span x-text="fmt(item.updatedAt)"></span></span>
       </button>
@@ -676,10 +681,10 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
     <p class="group-title" x-show="threadsIn('done').length">做完的</p>
     <div class="list" x-show="threadsIn('done').length">
       <template x-for="item in threadsIn('done')" :key="item.id">
-        <button class="li" type="button" @click="openThread(item.id)">
+        <button class="li" type="button" @click="openTaskThread(item)" :title="item.runs === 'desktop' ? '查看 DSH 执行过程' : '打开线程'">
           <span class="pill" :class="taskPill(stateOf(item))" style="height: 8px; width: 8px; padding: 0; background: currentColor" aria-hidden="true"></span>
           <span class="name" x-text="item.title"></span>
-          <span class="val" x-text="taskStatusText(stateOf(item)) + ' · ' + fmt(item.updatedAt)"></span>
+          <span class="val" x-text="taskStatusText(stateOf(item), item.runs) + ' · ' + fmt(item.updatedAt)"></span>
         </button>
       </template>
     </div>
@@ -1033,10 +1038,12 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
                 <div class="label"><span>最近的活</span><span class="spacer"></span><span class="pill" x-text="'24 小时内 ' + cloud.today + ' / ' + cloud.limit + ' 单'"></span></div>
                 <template x-for="task in cloud.tasks" :key="task.id">
                   <div class="mini-row">
-                    <div class="top-line"><span class="t" x-text="task.title"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task))"></span></div>
+                    <div class="top-line"><span class="t" x-text="task.title"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task), task.runs)"></span></div>
                     <p class="hint" x-show="task.summary || task.progress" x-text="task.summary || task.progress"></p>
                     <div class="choices">
-                      <button class="icon-btn sm" type="button" x-show="!task.test" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                      <button class="icon-btn sm" type="button" x-show="!task.test && task.runs !== 'desktop'" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
+                      <button class="btn small" type="button" x-show="task.runs === 'desktop'" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)" x-text="desktop ? '查看 DSH 执行过程' : '请在原设备的 DSH 中查看执行过程'"></button>
+                      <span class="sub" role="alert" x-show="task.runs === 'desktop' && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
                       <template x-for="link in taskLinks(task)" :key="link.url"><a class="btn small" :href="link.url" target="_blank" rel="noopener noreferrer" x-text="link.text"></a></template>
                     </div>
                   </div>

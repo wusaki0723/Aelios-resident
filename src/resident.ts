@@ -47,6 +47,7 @@ import { EffectiveHistoryError, installEffectiveHistory } from "./effective-hist
 import { historyPathComplete } from "./history-path";
 import { readAuxiliaryAnswer, removeAuxiliaryTurn } from "./letter-auxiliary";
 import { fakeModel } from "./fake-model";
+import { DesktopDeviceStore, desktopReply } from "./desktop-devices";
 import { TaskWorker, handedPath, type ThreadFile, type ThreadLine } from "./task-worker";
 import { ALARM_PREFIX, CHAT_RULES, DEFAULT_PERSONA, HEARTBEATS, MAX_HEARTBEATS, LETTER_PREFIX, SKIP, checkinPrompt, heartbeatPrompt, isCheckin, isNote, letterPrompt, stamp } from "./prompts";
 import { inQuietHours, quietHoursInWords, quietHoursOf } from "./quiet-hours";
@@ -660,6 +661,11 @@ export class Resident extends Think<Env> {
       }
     } catch (error) {
       console.error("startup: alarm restoration failed; durable alarms retained for retry", kind(error));
+    }
+    try {
+      await this.armDesktopReports();
+    } catch (error) {
+      console.error("startup: desktop report recovery failed; durable reports retained", kind(error));
     }
     // Not waited for: the first request should not wait on Telegram.
     this.ctx.waitUntil(this.repairMenuButton().catch((error) => console.error("startup: menu button check failed", kind(error))));
@@ -1373,6 +1379,56 @@ export class Resident extends Think<Env> {
   // ---- the resident's threads, its hands (cloud-tasks.ts, task-worker.ts) ----
 
   #taskStore: TaskStore | null = null;
+  #desktopStore: DesktopDeviceStore | null = null;
+  #desktopDrain: Promise<void> | null = null;
+
+  private desktopDevices(): DesktopDeviceStore {
+    this.#desktopStore ??= new DesktopDeviceStore(this.sql.bind(this) as Sql, this.cloudTasks(), operation => this.ctx.storage.transactionSync(operation));
+    return this.#desktopStore;
+  }
+
+  webDesktop() { return this.desktopDevices().list(); }
+  webDesktopRegister(input: unknown) { return desktopReply(() => this.desktopDevices().register(input)); }
+  async webDesktopRevoke(input: unknown) {
+    const result = await desktopReply(() => this.desktopDevices().revoke(input));
+    await this.armDesktopReports();
+    return result;
+  }
+  async desktopDeviceRequest(token: string, action: "heartbeat" | "claim" | "events", input: unknown) {
+    const result = await desktopReply(() => this.desktopDevices().request(token, action, input, this.cloudTasksOn()));
+    await this.armDesktopReports();
+    return result;
+  }
+
+  private async armDesktopReports(): Promise<void> {
+    if (!this.desktopDevices().pendingReports().length) return;
+    try { await this.schedule(1, "drainDesktopReports", {}, { idempotent: true }); }
+    catch (error) { console.error("desktop: report scheduling failed; durable report retained", { error: error instanceof Error ? error.name : typeof error }); }
+  }
+
+  /** The inbox transaction saved each terminal result and outbox row before its event was acknowledged. */
+  async drainDesktopReports(): Promise<void> {
+    if (this.#desktopDrain) return this.#desktopDrain;
+    const run = async () => {
+      const devices = this.desktopDevices();
+      for (const jobId of devices.pendingReports()) {
+        const task = this.cloudTasks().get(jobId);
+        if (!task) continue;
+        const id = `desktop_result_${jobId}`;
+        const message = { id, role: "user", parts: [{ type: "text", text: resultNote(task) }], metadata: { at: task.updatedAt } } as UIMessage;
+        // Stable across RPC retries, outbox retries and isolate restarts, unlike a wall-clock message ID.
+        await this.submitMessages([message], { idempotencyKey: id });
+        devices.reportDelivered(jobId);
+      }
+    };
+    this.#desktopDrain = run().finally(() => { this.#desktopDrain = null; });
+    try { await this.#desktopDrain; }
+    catch (error) {
+      await this.schedule(30, "drainDesktopReports", {}, { idempotent: true });
+      throw error;
+    }
+  }
+
   // Tasks each running turn has sent.
   #turnTasks = new Map<string, number>();
 
@@ -1419,7 +1475,7 @@ export class Resident extends Think<Env> {
 
   /** Where jobs can run besides the resident's own threads. */
   private taskRoutes(): TaskRoutes {
-    return { linux: Boolean(this.githubToken()), external: Boolean(this.taskTrigger()) };
+    return { linux: Boolean(this.githubToken()), external: Boolean(this.taskTrigger()), desktop: this.cloudTasksOn() && Boolean(this.desktopDevices().active()) };
   }
 
   /**
@@ -1476,7 +1532,7 @@ export class Resident extends Think<Env> {
           title: z.string().describe("A few words in their language, for the task's card."),
           job: z.string().describe("The whole job, for a thread that knows nothing else."),
           repo: z.string().optional().describe("owner/name of the GitHub repository to work in, if there is one."),
-          execution: z.enum(["local", "external", "linux"]).optional().describe("Where it runs, from the description. Leave it out for the usual place."),
+          execution: z.enum(["local", "external", "linux", "desktop"]).optional().describe("Where it runs, from the description. desktop is their paired computer and never falls back to cloud. Leave it out for the usual place."),
           follow_up_of: z.string().optional().describe("The id (t_…) of an earlier task or thread this one continues; find finds it."),
           role: z.string().optional().describe("A role from their settings page (coder, reviewer, researcher, or one they added): its instructions go before your job and its threads use its model, so write only what this job needs. A follow-up keeps its thread's role.")
         }),
@@ -1538,6 +1594,7 @@ export class Resident extends Think<Env> {
   private placeFor(asked: TaskExecution | undefined): TaskExecution | undefined | { error: string } {
     if (!asked || asked === "local") return asked;
     const routes = this.taskRoutes();
+    if (asked === "desktop") return routes.desktop ? "desktop" : { error: "Not sent: no paired desktop device. A desktop job is never moved to a cloud executor." };
     if (routes[asked]) return asked;
     const other = asked === "linux" ? "external" : "linux";
     if (routes[other]) return other;
@@ -1591,14 +1648,25 @@ export class Resident extends Think<Env> {
     if (!this.cloudTasksOn()) return { error: "后台帮忙关着" };
     const trigger = this.taskTrigger();
     const routes = this.taskRoutes();
+    if (follows?.runs === "desktop" && input.execution && input.execution !== "desktop") return { error: "本机线程不能悄悄改派到云端；请明确新建另一任务" };
     // A follow-up stays where its thread ran, while that is still set up.
-    const stays = follows && (follows.runs === "local" || routes[follows.runs]) ? follows.runs : null;
+    const stays = follows && (follows.runs === "local" || follows.runs === "desktop" || routes[follows.runs]) ? follows.runs : null;
     const execution: TaskExecution = input.execution ?? stays ?? (routes.external ? "external" : "local");
     if (execution === "linux" && !routes.linux) return { error: "还没接 GitHub Actions：设置页里填一个 GitHub token" };
     if (execution === "external" && !routes.external) return { error: "还没接 claude.ai 定时任务：设置页里填它的触发网址和 token" };
     const store = this.cloudTasks();
     const added = store.add({ ...input, execution });
     if ("error" in added) return added;
+    if (execution === "desktop") {
+      const enqueued = await desktopReply(() => this.desktopDevices().enqueue(added.task, follows));
+      if (enqueued.status !== 200) {
+        store.drop(added.task.id);
+        return { error: (enqueued.body as { error: string }).error };
+      }
+      await this.schedule(5 * 60, "taskQuiet", { id: added.task.id });
+      await this.pruneTasks();
+      return store.get(added.task.id)!;
+    }
     if (execution === "local") {
       store.sent(added.task.id, "");
       try {
@@ -1885,6 +1953,11 @@ export class Resident extends Think<Env> {
   async taskQuiet(payload: { id: string }): Promise<void> {
     const store = this.cloudTasks();
     const pending = store.get(payload.id);
+    if (pending?.runs === "desktop") {
+      if (this.desktopDevices().quiet(pending.id)) await this.schedule(5 * 60, "taskQuiet", { id: pending.id });
+      await this.armDesktopReports();
+      return;
+    }
     if (pending?.runs === "local" && (pending.status === "sent" || pending.status === "working")) {
       const code = store.codeOf(pending.id) ?? "";
       const report = this.dynamicAgents.has(TaskWorker, threadName(pending.root))

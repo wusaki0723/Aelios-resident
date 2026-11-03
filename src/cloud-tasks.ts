@@ -62,7 +62,7 @@ export type TaskStatus = "sent" | "working" | "done" | "failed" | "needs_you" | 
 const REPORTED: readonly TaskStatus[] = ["done", "failed", "needs_you"];
 
 /** Where a task runs (see the top of this file). */
-export type TaskExecution = "local" | "linux" | "external";
+export type TaskExecution = "local" | "linux" | "external" | "desktop";
 
 export type Task = {
   id: string;
@@ -81,6 +81,9 @@ export type Task = {
   unasked: number;
   status: TaskStatus;
   sessionUrl: string;
+  /** Opaque desktop identifiers only; neither is a URL, a credential or a local path. */
+  deviceId?: string;
+  desktopSessionId?: string;
   progress: string;
   progressAt: number | null;
   summary: string;
@@ -114,6 +117,8 @@ export type TaskCard = Pick<
   | "direct"
 > & {
   thread: string;
+  deviceId?: string;
+  desktopSessionId?: string;
   /** Still waits for them: needs_you, not dealt with, and not carried on by a later task of its thread. */
   waiting: boolean;
 };
@@ -384,7 +389,7 @@ export function taskOfNote(text: string): string | null {
 }
 
 /** Where jobs can run with these settings: local always; linux with a GitHub token; external with claude.ai's trigger. */
-export type TaskRoutes = { linux: boolean; external: boolean };
+export type TaskRoutes = { linux: boolean; external: boolean; desktop?: boolean };
 
 /**
  * cloud_task's description. It is the same whatever is set up, so turning a place on or off on the settings page
@@ -406,6 +411,10 @@ export const TASK_DESCRIPTION =
   "open it and talk to it.\n" +
   "- linux: a GitHub Actions run on their GitHub account, with a shell: installing, building, running tests, opening " +
   "pull requests; name the repository to change in repo.\n" +
+  "- desktop: a background DSH session on their explicitly paired computer, in the workspace and permissions they " +
+  "approve locally. It can only list and read workspace files, not write, run commands or delegate. " +
+  "Pick it only when they ask for work on that computer; it waits while the device is offline. " +
+  "Never substitute a cloud executor for desktop, or use local to mean their computer.\n" +
   "Leave execution out and it goes where they want jobs to go: claude.ai when it is set up, otherwise a thread here. " +
   "Pick local for reading and writing that needs no repository. When the job needs a shell, pick external or linux: " +
   "it goes to whichever of the two is set up. The answer says where it went, or which places are set up.";
@@ -426,6 +435,8 @@ type Row = {
   unasked: number;
   status: TaskStatus;
   session_url: string;
+  desktop_device_id: string;
+  desktop_session_id: string;
   progress: string;
   progress_at: number | null;
   progress_count: number;
@@ -449,12 +460,13 @@ function taskOf(row: Row): Task {
     follows: row.follows,
     // Tasks from before threads: each was its own, and ran on claude.ai.
     root: row.root || row.id,
-    runs: (["local", "linux", "external"].includes(row.runs) ? row.runs : "external") as TaskExecution,
+    runs: (["local", "linux", "external", "desktop"].includes(row.runs) ? row.runs : "external") as TaskExecution,
     direct: Boolean(row.direct),
     role: row.role ?? "",
     unasked: row.unasked ?? 0,
     status: row.status,
     sessionUrl: row.session_url,
+    ...(row.runs === "desktop" ? { deviceId: row.desktop_device_id || undefined, desktopSessionId: row.desktop_session_id || undefined } : {}),
     progress: row.progress,
     progressAt: row.progress_at,
     summary: row.summary,
@@ -473,7 +485,8 @@ function taskOf(row: Row): Task {
 export function cardOf(task: Task, newest = true): TaskCard {
   const { id, title, status, sessionUrl, progress, summary, links, choices, chosen, test, createdAt, updatedAt, runs, direct } = task;
   const waiting = status === "needs_you" && !task.settled && newest;
-  return { id, title, status, sessionUrl, progress, summary, links, choices, chosen, test, createdAt, updatedAt, runs, direct, thread: task.root, waiting };
+  return { id, title, status, sessionUrl, progress, summary, links, choices, chosen, test, createdAt, updatedAt, runs, direct, thread: task.root, waiting,
+    ...(runs === "desktop" ? { deviceId: task.deviceId, desktopSessionId: task.desktopSessionId } : {}) };
 }
 
 /** A file of a thread here, as the thread lists it (task-worker.ts's ThreadFile). */
@@ -495,7 +508,8 @@ export type FoundThread = {
 };
 
 /** One thread as the web page lists it: its first task's id, its newest task's title and state. */
-export type ThreadCard = { id: string; title: string; status: TaskStatus; runs: TaskExecution; tasks: number; updatedAt: number; waiting: boolean };
+export type ThreadCard = { id: string; title: string; status: TaskStatus; runs: TaskExecution; tasks: number; updatedAt: number; waiting: boolean;
+  desktopJobId?: string; deviceId?: string; desktopSessionId?: string };
 
 function hex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -559,6 +573,8 @@ export class TaskStore {
       ["chosen", () => sql`ALTER TABLE res_tasks ADD COLUMN chosen TEXT NOT NULL DEFAULT ''`],
       ["settled", () => sql`ALTER TABLE res_tasks ADD COLUMN settled INTEGER NOT NULL DEFAULT 0`],
       ["role", () => sql`ALTER TABLE res_tasks ADD COLUMN role TEXT NOT NULL DEFAULT ''`],
+      ["desktop_device_id", () => sql`ALTER TABLE res_tasks ADD COLUMN desktop_device_id TEXT NOT NULL DEFAULT ''`],
+      ["desktop_session_id", () => sql`ALTER TABLE res_tasks ADD COLUMN desktop_session_id TEXT NOT NULL DEFAULT ''`],
       ["unasked", () => sql`ALTER TABLE res_tasks ADD COLUMN unasked INTEGER NOT NULL DEFAULT 0`]
     ] as const) {
       try {
@@ -569,6 +585,8 @@ export class TaskStore {
         else if (column === "chosen") sql`SELECT chosen FROM res_tasks LIMIT 0`;
         else if (column === "settled") sql`SELECT settled FROM res_tasks LIMIT 0`;
         else if (column === "role") sql`SELECT role FROM res_tasks LIMIT 0`;
+        else if (column === "desktop_device_id") sql`SELECT desktop_device_id FROM res_tasks LIMIT 0`;
+        else if (column === "desktop_session_id") sql`SELECT desktop_session_id FROM res_tasks LIMIT 0`;
         else sql`SELECT unasked FROM res_tasks LIMIT 0`;
       } catch {
         add();
@@ -767,7 +785,8 @@ export class TaskStore {
         card.title = task.title;
       } else if (cards.size < limit) {
         const waiting = task.status === "needs_you" && !task.settled;
-        cards.set(task.root, { id: task.root, title: task.title, status: task.status, runs: task.runs, tasks: 1, updatedAt: task.updatedAt, waiting });
+        cards.set(task.root, { id: task.root, title: task.title, status: task.status, runs: task.runs, tasks: 1, updatedAt: task.updatedAt, waiting,
+          ...(task.runs === "desktop" ? { desktopJobId: task.id, deviceId: task.deviceId, desktopSessionId: task.desktopSessionId } : {}) });
       }
     }
     return [...cards.values()];
@@ -860,7 +879,16 @@ export class TaskStore {
   prune(): string[] {
     // Threads here, and ones on GitHub Actions, which keep the files their runs handed back here.
     const before = new Set(this.sql<{ root: string }>`SELECT DISTINCT root FROM res_tasks WHERE runs IN ('local', 'linux') AND root != ''`.map((row) => row.root));
-    this.sql`DELETE FROM res_tasks WHERE id NOT IN (SELECT id FROM res_tasks ORDER BY created_at DESC, rowid DESC LIMIT ${TASKS_KEPT})`;
+    const desktopReports = this.sql<{ name: string }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'res_desktop_reports'`.length > 0;
+    if (desktopReports) {
+      // An acknowledged device result must survive normal history pruning until its durable report was submitted.
+      this.sql`DELETE FROM res_tasks WHERE id NOT IN (SELECT id FROM res_tasks ORDER BY created_at DESC, rowid DESC LIMIT ${TASKS_KEPT})
+        AND NOT (runs = 'desktop' AND status IN ('sent', 'working', 'needs_you'))
+        AND id NOT IN (SELECT job_id FROM res_desktop_reports WHERE delivered = 0)`;
+    } else {
+      this.sql`DELETE FROM res_tasks WHERE id NOT IN (SELECT id FROM res_tasks ORDER BY created_at DESC, rowid DESC LIMIT ${TASKS_KEPT})
+        AND NOT (runs = 'desktop' AND status IN ('sent', 'working', 'needs_you'))`;
+    }
     this.sql`DELETE FROM res_thread_files WHERE root NOT IN (SELECT root FROM res_tasks)`;
     const after = new Set(this.sql<{ root: string }>`SELECT DISTINCT root FROM res_tasks WHERE runs IN ('local', 'linux') AND root != ''`.map((row) => row.root));
     return [...before].filter((root) => !after.has(root));

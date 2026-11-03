@@ -23,6 +23,12 @@ No server to rent and no code to write: send one message to an AI that can run c
 
 > **The interface is in Chinese.** The web page, the settings and the bot's command replies are in Chinese. This README gives each label's Chinese text in 「」 so you can find it on screen. The resident itself chats in whatever language its persona is written in.
 
+## Resident in DSH (optional, development version)
+
+The separate `@aelios/dsh-resident` plugin displays the **original Resident web interface** inside DSH. Chat, persona and memory stay with your cloud resident. After you explicitly register this device and choose a workspace, the resident can hand a small local task to an independent native DSH session running in the background. Click **View DSH execution** (「查看 DSH 执行过程」) on its card to open the ordinary DSH conversation; returning to Resident does not cancel the task.
+
+The first version grants **read-only access to one chosen workspace**, with one registered device per resident. It cannot write local files, run commands or delegate more work. ACP is deferred. The plugin and the matching Resident code are both required; microphone recording and Push notifications use the full website. See [desktop setup, boundaries and current limits](docs/dsh-desktop.md) (Chinese).
+
 ## A day with it
 
 > **23:38**　You mention the interview is tomorrow and you can't sleep. It remembers that your practice run last week went well, and that you talk too fast when you are nervous. It tells you to pause for a second before you begin, and sets an alarm.

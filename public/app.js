@@ -248,14 +248,18 @@ function resident() {
   };
   var USAGE_SPANS = [{ key: 'today', label: '今天' }, { key: 'week', label: '7 天' }, { key: 'month', label: '30 天' }];
 
-  function readKey() { try { return localStorage.getItem('resident.key') || ''; } catch (e) { return ''; } }
-  function writeKey(value) { try { value ? localStorage.setItem('resident.key', value) : localStorage.removeItem('resident.key'); } catch (e) {} }
-  function remember(name, value) { try { localStorage.setItem(name, value); } catch (e) {} }
-  function recall(name) { try { return localStorage.getItem(name) || ''; } catch (e) { return ''; } }
+  var desktopUI = window.ResidentDesktopUI;
+  var desktop = desktopUI && desktopUI.enabled(window.ResidentDesktop) ? window.ResidentDesktop : null;
+  var desktopPrefs = Object.create(null);
+  var desktopDraftReady = false;
+  function readKey() { if (desktop) return 'desktop'; try { return localStorage.getItem('resident.key') || ''; } catch (e) { return ''; } }
+  function writeKey(value) { if (desktop) return; try { value ? localStorage.setItem('resident.key', value) : localStorage.removeItem('resident.key'); } catch (e) {} }
+  function remember(name, value) { if (desktop) { desktopPrefs[name] = value; return; } try { localStorage.setItem(name, value); } catch (e) {} }
+  function recall(name) { if (desktop) return desktopPrefs[name] || ''; try { return localStorage.getItem(name) || ''; } catch (e) { return ''; } }
   // Which resident the page is on (src/residents.ts): ?r=<id> (a notification, another bot's Mini App), else the one
   // last opened on this device. "default" is the first one.
   var RESIDENT_ID = /^[a-z][a-z0-9-]{0,23}$/;
-  function residentFromUrl() { try { var id = new URLSearchParams(location.search).get('r') || ''; return RESIDENT_ID.test(id) ? id : ''; } catch (e) { return ''; } }
+  function residentFromUrl() { if (desktop) return ''; try { var id = new URLSearchParams(location.search).get('r') || ''; return RESIDENT_ID.test(id) ? id : ''; } catch (e) { return ''; } }
   // Text as the search compares it (chat-search.ts): each letter lowercased on its own, the same length as the text.
   function foldText(text) {
     var out = '';
@@ -264,7 +268,7 @@ function resident() {
   }
   // The search page's state: what was asked, the hits so far, where the next page starts and the hit opened.
   function freshSearch() { return { q: '', asked: '', busy: false, done: false, error: '', results: [], next: null, open: '', around: {} }; }
-  function seenOf() { try { return JSON.parse(localStorage.getItem('resident.seen') || '{}') || {}; } catch (e) { return {}; } }
+  function seenOf() { try { return JSON.parse(recall('resident.seen') || '{}') || {}; } catch (e) { return {}; } }
   // The same rule as Telegram: a blank line starts a new bubble, except inside a fenced code block.
   function bubbleTexts(text) {
     var parts = [];
@@ -306,6 +310,10 @@ function resident() {
 
   return Object.assign({
     key: readKey(),
+    desktop: Boolean(desktop),
+    desktopOpening: '',
+    desktopError: '',
+    desktopErrorJob: '',
     miniApp: false,
     miniToken: '',
     miniExpires: 0,
@@ -423,6 +431,25 @@ function resident() {
 
     async start() {
       var self = this;
+      if (desktop) {
+        try {
+          var desktopState = await desktop.ready;
+          if (!desktopState || !RESIDENT_ID.test(desktopState.resident || '')) {
+            desktopState = await desktop.request('state.get', {}).catch(function () { return {}; });
+          }
+          if (desktopState && RESIDENT_ID.test(desktopState.resident || '')) this.resident = desktopState.resident;
+          await desktop.request('resident.select', { resident: this.resident });
+          var restored = await desktop.request('state.get', {});
+          if (restored && restored.resident === this.resident && typeof restored.draft === 'string') this.draft = restored.draft.slice(0, 16000);
+          await this.$nextTick();
+          desktopDraftReady = true;
+          this.$watch('draft', function (text) {
+            if (!desktopDraftReady) return;
+            desktop.request('draft.save', { resident: self.resident, text: String(text || '').slice(0, 16000) }).catch(function (error) { self.notify(error.message || '草稿暂时无法保存'); });
+          });
+          this.key = 'desktop';
+        } catch (error) { this.loginError = error.message || '桌面连接尚未就绪'; return; }
+      }
       this.applyTheme();
       this.$nextTick(function () { self.watchStream(); });
       try {
@@ -436,7 +463,7 @@ function resident() {
         if (self.view === 'config') self.loadMcp().catch(function () {});
       });
       // A notification tapped while this page is open: the page goes to the resident it is from.
-      if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', function (event) {
+      if (!desktop && 'serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', function (event) {
         var open = event.data && event.data.open;
         if (!open || self.miniApp) return;
         var id = '';
@@ -451,15 +478,15 @@ function resident() {
         self.catalog = data.models || [];
         self.catalogUpdated = data.updated || '';
       }).catch(function () {});
-      var miniLaunch = /(?:^#|[&#])tgWebAppData=/.test(location.hash);
+      var miniLaunch = !desktop && /(?:^#|[&#])tgWebAppData=/.test(location.hash);
       this.miniApp = miniLaunch;
       // A Mini App is its own bot's resident; a page opened without ?r= goes back to the one last opened here.
-      if (!miniLaunch && !residentFromUrl()) this.resident = RESIDENT_ID.test(recall('resident.current')) ? recall('resident.current') : 'default';
-      var readyBridge = await Promise.race([window.telegramReady, new Promise(function (resolve) { setTimeout(resolve, 10000, false); })]);
+      if (!desktop && !miniLaunch && !residentFromUrl()) this.resident = RESIDENT_ID.test(recall('resident.current')) ? recall('resident.current') : 'default';
+      var readyBridge = desktop ? true : await Promise.race([window.telegramReady, new Promise(function (resolve) { setTimeout(resolve, 10000, false); })]);
       if (miniLaunch && !readyBridge) { this.loginError = 'Telegram 组件没加载出来，请关闭小窗后重新打开'; return; }
       var tg = window.Telegram && window.Telegram.WebApp;
       if (miniLaunch && (!tg || !tg.initData)) { this.loginError = '没有收到 Telegram 的身份信息，请关闭小窗后重新打开'; return; }
-      if (tg && tg.initData) {
+      if (!desktop && tg && tg.initData) {
         this.miniApp = true;
         telegram = tg;
         this.key = '';
@@ -536,7 +563,7 @@ function resident() {
       return response.json();
     },
     async check(key) {
-      this.key = key;
+      this.key = desktop ? 'desktop' : key;
       try {
         var data = await this.api('/web/check');
         this.aelios = Boolean(data.aelios);
@@ -559,7 +586,15 @@ function resident() {
         if (error.status === 404 && this.resident !== 'default' && !this.miniApp) {
           this.resident = 'default';
           remember('resident.current', 'default');
-          history.replaceState(null, '', '/');
+          if (desktop) {
+            desktopDraftReady = false;
+            try {
+              await desktop.request('resident.select', { resident: 'default' });
+              var restored = await desktop.request('state.get', {});
+              this.draft = restored && restored.resident === 'default' && typeof restored.draft === 'string' ? restored.draft.slice(0, 16000) : '';
+              await this.$nextTick();
+            } finally { desktopDraftReady = true; }
+          } else history.replaceState(null, '', '/');
           return this.check(key);
         }
         this.authed = false;
@@ -568,6 +603,7 @@ function resident() {
     },
     login() {
       this.loginError = '';
+      if (desktop) { this.check('desktop'); return; }
       if (this.keyInput.trim()) this.check(this.keyInput.trim());
     },
     // ---- the residents (src/residents.ts): one avatar each in the sidebar ----
@@ -615,10 +651,16 @@ function resident() {
       this.residents.open = false;
       if (id === this.resident && this.view === 'group') { this.view = 'chat'; this.scrollSoon(true); }
       if (id === this.resident || !this.authed) return;
+      if (desktop) {
+        await this.$nextTick();
+        desktopDraftReady = false;
+        try { await desktop.request('resident.select', { resident: desktopUI.residentId(id) }); }
+        catch (error) { desktopDraftReady = true; this.notify(error.message); return; }
+      }
       clearTimeout(pollTimer);
       this.resident = id;
       remember('resident.current', id);
-      try { history.replaceState(null, '', id === 'default' ? '/' : '/?r=' + id); } catch (e) {}
+      if (!desktop) try { history.replaceState(null, '', id === 'default' ? '/' : '/?r=' + id); } catch (e) {}
       var known = this.residents.list.find(function (r) { return r.id === id; });
       if (known) this.residents.seen[id] = known.saidAt;
       remember('resident.seen', JSON.stringify(this.residents.seen));
@@ -661,6 +703,15 @@ function resident() {
       this.thread = emptyThread();
       this.alarms = { on: false, limit: 10, alarms: [] };
       this.setLetter(null);
+      this.desktopError = ''; this.desktopErrorJob = '';
+      if (desktop) {
+        try {
+          var restored = await desktop.request('state.get', {});
+          if (restored && restored.resident === this.resident && typeof restored.draft === 'string') this.draft = restored.draft.slice(0, 16000);
+          await this.$nextTick();
+        } catch (error) { this.notify(error.message || '草稿暂时无法恢复'); }
+        finally { desktopDraftReady = true; }
+      }
       await this.check(this.key);
     },
     openAddResident() {
@@ -1801,8 +1852,27 @@ function resident() {
         this.notify(error.message);
       }
     },
+    async openDesktopTask(task) {
+      if (this.desktopOpening) return;
+      var on = this.resident;
+      var id = task && (task.desktopJobId || task.lastJobId || task.id) || '';
+      this.desktopOpening = id;
+      this.desktopError = ''; this.desktopErrorJob = id;
+      try {
+        if (desktop) await desktop.request('draft.save', { resident: on, text: String(this.draft || '').slice(0, 16000) });
+        await desktopUI.open(desktop, on, task);
+      }
+      catch (error) {
+        if (on === this.resident) { this.desktopError = error.message; this.notify(error.message); }
+      } finally { this.desktopOpening = ''; }
+    },
+    openTaskThread(task) {
+      return task.runs === 'desktop' ? this.openDesktopTask(task) : this.openThread(task.id);
+    },
     async openThread(id) {
       if (!id) return;
+      var desktopTask = this.threads.threads.find(function (task) { return task.id === id && task.runs === 'desktop'; });
+      if (desktopTask) return this.openDesktopTask(desktopTask);
       if (this.thread.id !== id) {
         this.thread = emptyThread();
         this.threadDraft = '';
@@ -1834,7 +1904,7 @@ function resident() {
       return this.threads.threads.filter(function (t) { return group === 'open' ? open(t) : !open(t); });
     },
     runsText(runs) {
-      return { local: '在住户这里干', linux: '在 GitHub Actions 上干', external: '在 claude.ai 上干' }[runs] || '';
+      return { local: '在住户这里干', linux: '在 GitHub Actions 上干', external: '在 claude.ai 上干', desktop: 'DSH 本机助手 · 后台运行' }[runs] || '';
     },
     threadSub() {
       var latest = (this.thread.tasks || []).at(-1);
@@ -2207,8 +2277,9 @@ function resident() {
       return group.hint || '';
     },
     // The address WeCom's 「接收消息」 takes.
+    siteOrigin() { return desktop ? desktopUI.origin(desktop, '') : location.origin; },
     wecomUrl() {
-      return location.origin + this.residentPrefix() + '/messengers/wecom/webhook';
+      return this.siteOrigin() + this.residentPrefix() + '/messengers/wecom/webhook';
     },
     async copyText(text) {
       try { await navigator.clipboard.writeText(text); this.notify('复制好了'); } catch (e) { this.notify('复制不了，长按自己复制'); }
@@ -2466,6 +2537,7 @@ function resident() {
 
     // ---- notifications on this device (web push) ----
     preparePush() {
+      if (desktop) { this.push.supported = false; this.push.on = false; return; }
       var ua = navigator.userAgent || '';
       this.push.ios = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
       this.push.standalone = Boolean((window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone);
@@ -2473,7 +2545,7 @@ function resident() {
       if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(function () {});
     },
     async loadPushState() {
-      if (this.miniApp) return;
+      if (desktop || this.miniApp) return;
       try {
         var data = await this.api('/web/push');
         this.push.devices = data.devices;
@@ -2496,6 +2568,7 @@ function resident() {
       remember('resident.push.ask', 'no');
     },
     async enablePush() {
+      if (desktop) { this.notify('请在原网页设置通知'); return; }
       if (this.push.busy) return;
       this.push.busy = true;
       this.push.error = '';
@@ -2520,6 +2593,7 @@ function resident() {
       }
     },
     async disablePush() {
+      if (desktop) { this.notify('请在原网页设置通知'); return; }
       if (this.push.busy) return;
       this.push.busy = true;
       try {
@@ -2539,6 +2613,7 @@ function resident() {
       }
     },
     async testPush() {
+      if (desktop) { this.notify('请在原网页测试通知'); return; }
       try {
         var result = await this.api('/web/push/test', { method: 'POST', body: {} });
         this.notify(result.sent ? '发出去了，看看通知栏' : result.failed.length ? '没发出去：' + result.failed[0] : '还没有设备开通知');
@@ -2647,7 +2722,9 @@ function resident() {
     cloudHost() {
       try { return new URL(this.cloud.origin).host; } catch (e) { return ''; }
     },
-    taskStatusText(status) {
+    taskStatusText(status, runs) {
+      if (runs === 'desktop' && status === 'sent') return '等本机领取';
+      if (runs === 'desktop' && status === 'working') return 'DSH 在后台处理';
       return TASK_STATUS[status] || status;
     },
     linkText(link) {
