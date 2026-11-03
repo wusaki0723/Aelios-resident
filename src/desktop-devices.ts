@@ -245,13 +245,12 @@ export class DesktopDeviceStore {
     }
   }
 
-  /** Periodic quiet checks update uncertainty, never resubmit a native job. */
-  quiet(jobId: string): boolean {
+  /** Periodic quiet checks update uncertainty, never resubmit a native job. The job's state after the check. */
+  quiet(jobId: string): string {
     return this.atomic(() => {
       const job = this.job(jobId);
-      if (!job || terminal.has(job.state)) return false;
-      this.expire(job.device_id);
-      return this.job(jobId)?.state === "queued" || this.job(jobId)?.state === "claimed" || this.job(jobId)?.state === "running";
+      if (job && !terminal.has(job.state)) this.expire(job.device_id);
+      return this.job(jobId)?.state ?? "";
     });
   }
 

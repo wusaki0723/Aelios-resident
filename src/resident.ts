@@ -1954,7 +1954,10 @@ export class Resident extends Think<Env> {
     const store = this.cloudTasks();
     const pending = store.get(payload.id);
     if (pending?.runs === "desktop") {
-      if (this.desktopDevices().quiet(pending.id)) await this.schedule(5 * 60, "taskQuiet", { id: pending.id });
+      const state = this.desktopDevices().quiet(pending.id);
+      if (["queued", "claimed", "running"].includes(state)) await this.schedule(5 * 60, "taskQuiet", { id: pending.id });
+      // Lost touch with their computer: told once, as the checks stop here.
+      else if (state === "unknown") await this.tellAboutTask(pending, (task) => quietNote(task, ""));
       await this.armDesktopReports();
       return;
     }

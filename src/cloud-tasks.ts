@@ -378,6 +378,9 @@ function carryOn(task: Task): string {
 /** The note for a task that has gone quiet. */
 export function quietNote(task: Task, after: string): string {
   if (task.runs === "local") return `${TASK_NOTE_PREFIX} ${task.id} "${task.title}" has not finished after ${after}. Tell them briefly.)`;
+  if (task.runs === "desktop") {
+    return `${TASK_NOTE_PREFIX} ${task.id} "${task.title}" lost touch with their computer before it reported back, so whether it ran is not known, and it is not run again by itself. Tell them briefly: they can look at its DSH session on that computer, then ask you to carry on or to send it again. A result that comes in late still comes to you.)`;
+  }
   return task.sessionUrl
     ? `${TASK_NOTE_PREFIX} ${task.id} "${task.title}" has not reported back after ${after}. It may still be working, or its reports may not get through (the run must be able to reach this resident's address). Tell them briefly, with the link: ${task.sessionUrl})`
     : `${TASK_NOTE_PREFIX} ${task.id} "${task.title}" has not reported back after ${after}. Tell them briefly.)`;

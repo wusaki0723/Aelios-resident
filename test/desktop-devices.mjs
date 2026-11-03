@@ -203,6 +203,8 @@ await test('a lost claim answer or an uncertain job never holds the device or it
     Date.now = () => now;
     for (let beat = 0; beat < 3; beat++) { now += 2 * 60_000; await f.devices.request(f.registration.token, 'heartbeat', {}); }
     assert.equal(f.db.prepare('SELECT state FROM res_desktop_jobs WHERE job_id = ?').get(lost.id).state, 'unknown', 'heartbeats do not keep an unstarted claim');
+    assert.equal(f.devices.quiet(lost.id), 'unknown', 'the quiet check sees it, and the resident tells them once');
+    assert.match(cloud.quietNote(f.tasks.get(lost.id), ''), /lost touch with their computer[\s\S]*not run again[\s\S]*DSH session/);
     assert.equal((await f.devices.request(f.registration.token, 'claim', {})).job.id, next.id, 'the next job is still claimed');
     assert.ok(f.add({ follows: lost.id }), 'they can ask to carry on an uncertain thread');
     const never = f.add();
