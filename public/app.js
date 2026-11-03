@@ -247,6 +247,8 @@ function resident() {
     set_alarm: '定了闹钟', list_alarms: '看了闹钟', cancel_alarm: '取消了闹钟', mcp_connect: '接了工具', edit_persona: '改了人设'
   };
   var USAGE_SPANS = [{ key: 'today', label: '今天' }, { key: 'week', label: '7 天' }, { key: 'month', label: '30 天' }];
+  // Where the page turns into the computer layout (the same width as in app.css).
+  var WIDE_SCREEN = '(min-width: 920px)';
 
   var desktopUI = window.ResidentDesktopUI;
   var desktop = desktopUI && desktopUI.enabled(window.ResidentDesktop) ? window.ResidentDesktop : null;
@@ -326,6 +328,8 @@ function resident() {
     // the residents in the sidebar, and which one this page is on
     resident: residentFromUrl() || 'default',
     residents: { list: [], max: 8, open: false, seen: seenOf(), add: { open: false, id: '', name: '', busy: false, error: '' }, busy: false },
+    // The wide screen's sidebar, folded away to give the conversation the whole width.
+    railFolded: recall('resident.rail') === 'folded',
     themePref: recall('resident.theme') || 'auto',
     theme: (typeof document !== 'undefined' && document.documentElement.dataset.theme) || 'dark',
     view: 'chat',
@@ -646,6 +650,38 @@ function resident() {
     anyResidentDot() {
       var self = this;
       return this.residents.list.some(function (r) { return self.residentDot(r); });
+    },
+    // The line under a name in the wide screen's sidebar.
+    residentSub(r) {
+      if (this.residentDot(r)) return '有新消息';
+      return r.saidAt ? '上次说话 ' + this.fmt(r.saidAt) : '还没说过话';
+    },
+    groupSub(g) {
+      var n = (g.members || []).length;
+      return n ? n + ' 个住户的群聊' : '群聊';
+    },
+    // The sidebar is beside the page from WIDE_SCREEN up (app.css); below that it is a drawer.
+    wideScreen() {
+      return typeof matchMedia === 'function' && matchMedia(WIDE_SCREEN).matches;
+    },
+    foldRail() {
+      this.railFolded = true;
+      remember('resident.rail', 'folded');
+    },
+    openRail() {
+      if (!this.wideScreen()) { this.residents.open = true; return; }
+      this.railFolded = false;
+      remember('resident.rail', '');
+    },
+    // The resident's own card in the sidebar: back to its chat, or who it is when the chat is already open.
+    showChat() {
+      if (this.view === 'chat') return this.openProfile();
+      if (this.view === 'group') return this.switchResident(this.resident);
+      if (this.view === 'config') return this.closeConfig();
+      if (this.view === 'persona' && this.personaDirty && !confirm('改的还没保存，不要了吗？')) return;
+      if (this.view === 'file') this.closeFile();
+      this.view = 'chat';
+      this.scrollSoon(true);
     },
     async switchResident(id) {
       this.residents.open = false;
