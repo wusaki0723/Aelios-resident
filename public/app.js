@@ -303,6 +303,23 @@ function resident() {
   var seenRev = '';
   var fullAt = 0;
   var picLoading = {};
+  // The Android app's notifications (Capacitor): one sign-up per installation, whichever resident is open.
+  var nativeListening = false;
+  var nativeQueue = Promise.resolve();
+  function nativeEnabled() { return recall('resident.push.native.enabled') === 'yes'; }
+  // Sign-ups and removals go to the server one at a time, in order.
+  function queueNative(work) {
+    var task = nativeQueue.then(work);
+    nativeQueue = task.catch(function () {});
+    return task;
+  }
+  async function nativeRequest(action, body, key) {
+    var response = await fetch('/web/push/native/' + action, {
+      method: 'POST', headers: { 'x-web-key': key, 'content-type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (!response.ok) throw new Error(action + ' ' + response.status);
+    return response.json();
+  }
   // Her lines from the server that already took the place of one sent from here.
   var settled = {};
   var seq = 0;
@@ -369,7 +386,7 @@ function resident() {
     lightbox: '',
     answer: { open: false, title: '', text: '', busy: false },
     alarmEdit: { open: false, id: '', kind: '', date: '', time: '', note: '', busy: false, error: '' },
-    push: { supported: false, ios: false, standalone: false, on: false, busy: false, devices: 0, error: '', asked: recall('resident.push.ask') },
+    push: { native: false, pending: false, supported: false, ios: false, standalone: false, on: false, busy: false, devices: 0, error: '', asked: recall('resident.push.ask') },
     nameEdit: { open: false, text: '', busy: false },
     avatarBusy: false,
 
@@ -2576,22 +2593,101 @@ function resident() {
       }
     },
 
-    // ---- notifications on this device (web push) ----
+    // ---- notifications on this device (native Capacitor, or web push) ----
     preparePush() {
       if (desktop) { this.push.supported = false; this.push.on = false; return; }
+      this.push.native = Boolean(window.Capacitor?.isNativePlatform?.());
+      if (this.push.native) {
+        this.push.supported = Boolean(window.Capacitor.Plugins?.PushNotifications);
+        if (!this.push.supported) this.push.error = '这个 App 未提供原生通知，请更新 App';
+        else this.listenNativePush();
+        return;
+      }
       var ua = navigator.userAgent || '';
       this.push.ios = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
       this.push.standalone = Boolean((window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone);
       this.push.supported = window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
       if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(function () {});
     },
+    nativePushError(message) {
+      this.push.on = false;
+      this.push.pending = false;
+      this.push.error = message;
+    },
+    // The app hands over its token now and whenever it changes; while turned on, it is signed up with it.
+    listenNativePush() {
+      if (nativeListening) return;
+      nativeListening = true;
+      var self = this;
+      var plugin = window.Capacitor.Plugins.PushNotifications;
+      plugin.addListener('registration', function (event) {
+        if (!event || typeof event.value !== 'string' || !event.value) return;
+        remember('resident.push.native.token', event.value);
+        if (self.authed && nativeEnabled()) self.syncNativePush().catch(function () {});
+      });
+      plugin.addListener('registrationError', function () {
+        // The plugin's error can carry the token: show a fixed message.
+        if (self.authed && nativeEnabled()) self.nativePushError('原生通知注册失败，请检查网络或系统通知设置后重试');
+      });
+    },
+    syncNativePush() {
+      var self = this;
+      return queueNative(async function () {
+        var token = recall('resident.push.native.token');
+        if (!self.authed || !nativeEnabled() || !token) return;
+        var previous = recall('resident.push.native.registered');
+        var body = previous && previous !== token ? { token: token, previousToken: previous } : { token: token };
+        var data;
+        try {
+          data = await nativeRequest('subscribe', body, self.key);
+        } catch (error) {
+          self.nativePushError('原生通知登记失败，请检查网络后重试');
+          throw new Error(self.push.error);
+        }
+        remember('resident.push.native.registered', token);
+        if (!self.authed || !nativeEnabled()) return;
+        self.push.devices = data.devices;
+        self.push.on = true;
+        self.push.pending = false;
+        self.push.error = '';
+        self.dismissPush();
+      });
+    },
+    async startNativePush(ask) {
+      var plugin = window.Capacitor.Plugins.PushNotifications;
+      this.listenNativePush();
+      var permission = await plugin.checkPermissions();
+      if (!this.authed) return;
+      if (ask && permission.receive !== 'granted') permission = await plugin.requestPermissions();
+      if (!this.authed) return;
+      if (permission.receive !== 'granted') throw new Error('没给通知权限：请在系统设置里允许这个 App 发通知');
+      if (ask) remember('resident.push.native.enabled', 'yes');
+      if (!nativeEnabled()) return;
+      this.push.pending = true;
+      // The token comes back through the registration event.
+      await plugin.register().catch(function () { throw new Error('原生通知注册失败，请检查网络或系统通知设置后重试'); });
+      await this.syncNativePush();
+    },
     async loadPushState() {
       if (desktop || this.miniApp) return;
       try {
         var data = await this.api('/web/push');
         this.push.devices = data.devices;
+        // The Worker has no FCM secret: nothing would reach this app, so it cannot be turned on here.
+        if (this.push.native && this.push.supported && data.native === false) {
+          this.push.supported = false;
+          this.push.on = false;
+          this.push.error = '服务器还没配安卓通知（FCM_SERVICE_ACCOUNT）';
+        }
       } catch (e) {}
       if (!this.push.supported) return;
+      if (this.push.native) {
+        if (this.push.busy || !this.authed) return;
+        if (!nativeEnabled()) { this.push.on = false; return; }
+        this.push.busy = true;
+        try { await this.startNativePush(false); } catch (error) { this.nativePushError(error.message); } finally { this.push.busy = false; }
+        return;
+      }
       try {
         var registration = await navigator.serviceWorker.getRegistration('/');
         var subscription = registration && (await registration.pushManager.getSubscription());
@@ -2602,7 +2698,7 @@ function resident() {
     },
     // Ask once in the chat, until she turns it on or says not now.
     pushInvite() {
-      return this.push.supported && !this.miniApp && !this.push.on && this.push.asked !== 'no' && this.lines.length > 2 && (!this.push.ios || this.push.standalone);
+      return this.push.supported && !this.miniApp && !this.push.on && this.push.asked !== 'no' && this.lines.length > 2 && (this.push.native || !this.push.ios || this.push.standalone);
     },
     dismissPush() {
       this.push.asked = 'no';
@@ -2614,6 +2710,10 @@ function resident() {
       this.push.busy = true;
       this.push.error = '';
       try {
+        if (this.push.native) {
+          await this.startNativePush(true);
+          return;
+        }
         var permission = await Notification.requestPermission();
         if (permission !== 'granted') throw new Error('没给通知权限：在浏览器设置里允许这个网页发通知');
         var registration = await navigator.serviceWorker.register('/sw.js');
@@ -2627,8 +2727,9 @@ function resident() {
         this.dismissPush();
         this.notify('通知开好了');
       } catch (error) {
-        this.push.error = error.message;
-        this.notify(error.message);
+        if (this.push.native) this.nativePushError(error.message);
+        else this.push.error = error.message;
+        this.notify(this.push.error);
       } finally {
         this.push.busy = false;
       }
@@ -2637,7 +2738,26 @@ function resident() {
       if (desktop) { this.notify('请在原网页设置通知'); return; }
       if (this.push.busy) return;
       this.push.busy = true;
+      this.push.error = '';
       try {
+        if (this.push.native) {
+          // Off first, so a token event meanwhile does not sign it up again; back on if the server did not hear.
+          remember('resident.push.native.enabled', 'no');
+          var key = this.key;
+          var data = await queueNative(async function () {
+            // The newest token too: a sign-up whose answer was lost may have reached the server.
+            var tokens = [recall('resident.push.native.registered'), recall('resident.push.native.token')].filter(Boolean);
+            var last = null;
+            for (var token of new Set(tokens)) last = await nativeRequest('unsubscribe', { token: token }, key);
+            return last;
+          }).catch(function (error) { remember('resident.push.native.enabled', 'yes'); throw error; });
+          remember('resident.push.native.registered', '');
+          if (data) this.push.devices = data.devices;
+          this.push.on = false;
+          this.push.pending = false;
+          this.notify('这台设备不收通知了');
+          return;
+        }
         var registration = await navigator.serviceWorker.getRegistration('/');
         var subscription = registration && (await registration.pushManager.getSubscription());
         if (subscription) {
@@ -2648,7 +2768,8 @@ function resident() {
         this.push.on = false;
         this.notify('这台设备不收通知了');
       } catch (error) {
-        this.notify(error.message);
+        this.push.error = this.push.native ? '关闭通知同步失败，请重试' : error.message;
+        this.notify(this.push.error);
       } finally {
         this.push.busy = false;
       }

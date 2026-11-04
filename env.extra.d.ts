@@ -102,5 +102,7 @@ interface Env {
   CLAUDE_BOX_KEY?: string;
   // Empty: AI Gateway uses the key stored on the gateway for the voice provider (BYOK).
   VOICE_API_KEY?: string;
+  // Firebase service account JSON for optional native Android push. Worker secret only.
+  FCM_SERVICE_ACCOUNT?: string;
   WEB_KEY?: string;
 }

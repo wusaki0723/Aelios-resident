@@ -216,3 +216,9 @@ UI 按以下合同读取状态，写信结果与送达结果互不替代。
 ## 后台帮忙的设置页
 
 `node test/web-ui.mjs` 检查「后台帮忙」名称、独立模型输入（可填任意接口模型 ID）、示例按钮和留空语义。`webTasks` 的 `mode: local` 配合 `linuxAvailable: true` 显示「自己后台干 · Linux 已接好」，并保留未接好和外部模式状态；设置页说明日常默认 Think 原生子 agent，需要 shell、构建或文档工具链时每单明确选 `execution: linux`。检查持久 SQLite 工作区没有 shell / JavaScript 执行后端、没有住户文件下载入口的说明，以及 Actions artifact 交付、Pages 显式发布的设置要求。保留上游时间流 UI 的检查。连接测试在已配置触发器时测试该服务，没有时测试本地。原生子 agent 后续任务沿用工作区和历史；对应运行与持久化由后台测试验证。真实跨仓库权限、Actions artifact 上传、Pages 建站与 Cloudflare 构建需在对应 GitHub/Cloudflare 配置下另验；本地替身不证明在线发布成功。
+
+## Android 原生推送
+
+新增 `node test/fcm.mjs`（HTTP v1、内存 RSA 签名、OAuth 缓存和失效 token）、`node test/native-push.mjs`（实际 Resident 方法与 SQLite、两通道发送及策略）、`node test/native-push-ui.mjs`（模拟 Capacitor 的实际页面函数）。已有 `web-push.mjs`、`web-ui.mjs` 继续覆盖普通浏览器。真实本地 Worker 路由由 `TEST_BASE_URL=http://127.0.0.1:8787 node test/native-push-worker.mjs` 验证（Worker 启动时加 `--var FCM_SERVICE_ACCOUNT:not-json`），使用全新隔离状态和无个人环境变量文件的测试目录。详细配置与测试边界见 [native-push.md](native-push.md)。
+
+本轮本地检查通过：`npm run typecheck`、FCM 11 项、共用推送 SQLite/策略 6 项、原生前端 13 组、原有 Web Push 6 组和全部 Web UI 测试；真实本地 Worker 的原有 `web` 16 组、`residents` 12 组，以及新增原生推送路由检查均通过。退出登录和网页推送一样，不注销这台设备，要停就在设置里关通知。测试 Worker 使用临时目录中的测试配置、源代码链接和独立状态，未加载个人 `.env` / `.dev.vars`。未连接真实 Firebase 或手机，未部署到 Cloudflare。

@@ -146,6 +146,8 @@ Telegram（选装）──▶ Worker（验 secret、白名单、命令）──�
 
 **当成 App、收通知**：在手机上把网页门加到主屏幕（Safari：分享 →「添加到主屏幕」；Chrome：「安装应用」），再从聊天里那张卡，或设置页「通知」里打开通知。默认（`WEB_PUSH`）它主动找你、线程做完、闹钟响了，这些话没发到 Telegram 或企业微信的推过来；你在网页上说了话走开 20 秒以上，它的回复也推过来。iPhone 和 iPad 只有从主屏幕图标打开才能收（iOS 16.4 起）；Telegram 的 Mini App 里没有通知。签通知用的钥匙是第一个住户自己生成的，只存在它身上，开了通知的设备名单也存在它那里；别的住户用同一把钥匙签、推给同一份名单。
 
+**安卓原生通知**：Capacitor 壳通过 PushNotifications 插件接 FCM HTTP v1，浏览器和 PWA 继续用网页推送。两种通道共用设备名单和「推什么」设置。Firebase 配置、Worker 的 `FCM_SERVICE_ACCOUNT` secret 和本地检查见 [安卓 FCM 通知](docs/native-push.md)。
+
 ### Telegram
 
 - 只回私聊，只回「谁能在 Telegram 上跟它说话」里的人。

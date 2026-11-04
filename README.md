@@ -148,6 +148,8 @@ Open the Worker's address and enter `WEB_KEY`. It is the same conversation as Te
 
 **As an app with notifications**: on a phone, add the web door to the home screen (Safari: Share → Add to Home Screen; Chrome: Install app). Then turn on notifications from the card the chat shows, or under **Notifications** (「通知」) in settings. By default (`WEB_PUSH`) it notifies you when it reaches out, a thread finishes or an alarm rings and that message did not reach you on Telegram or WeCom, and when it answers on the web after you have left the page for 20 seconds. On iPhone and iPad, notifications work only from the home-screen icon (iOS 16.4 or later); in the Telegram Mini App there are none. The keys that sign the notifications are made by the first resident and stay in it, along with the list of devices that turned notifications on; the other residents sign with the same pair and send to the same devices.
 
+**Native Android notifications**: Capacitor shells use the PushNotifications plugin and optional FCM HTTP v1 delivery. Browser/PWA notifications keep using Web Push. Both channels share the device list and notification preferences. See [Android FCM setup](docs/native-push.md) (Chinese) for Firebase configuration, the `FCM_SERVICE_ACCOUNT` Worker secret, and local checks.
+
 ### Telegram
 
 - It answers private chats only, and only the people listed under **Who can talk to it on Telegram**.
