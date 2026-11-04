@@ -335,6 +335,8 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
           quote?: string;
           again?: boolean;
           subscription?: unknown;
+          token?: unknown;
+          previousToken?: unknown;
           endpoint?: string;
           execution?: string;
           template?: string;
@@ -424,6 +426,15 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
     }
     case "POST /web/push/unsubscribe":
       return Response.json(await agent.webPushUnsubscribe(String(body.endpoint ?? "")));
+    case "POST /web/push/native/subscribe": {
+      await agent.noteOrigin(at.base);
+      const saved = await agent.nativePushSubscribe(body.token, body.previousToken);
+      return Response.json(saved, { status: "error" in saved ? 400 : 200 });
+    }
+    case "POST /web/push/native/unsubscribe": {
+      const saved = await agent.nativePushUnsubscribe(body.token);
+      return Response.json(saved, { status: "error" in saved ? 400 : 200 });
+    }
     case "POST /web/push/test":
       return Response.json(await agent.webPushTest());
     case "POST /web/pin":

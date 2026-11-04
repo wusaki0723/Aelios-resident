@@ -882,8 +882,8 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
           <div class="section">
             <p class="hint">它主动找你、线程做完、闹钟响了，推到这台设备上。</p>
             <p class="status-line" x-show="miniApp">在 Telegram 里打开时用不了；用浏览器打开这个网页再来开。</p>
-            <p class="status-line needs" x-show="!miniApp && !push.supported && push.ios && !push.standalone">iPhone 和 iPad：先在 Safari 里点「分享 → 添加到主屏幕」，从主屏幕打开，再来这里开通知。</p>
-            <p class="status-line" x-show="!miniApp && !push.supported && !(push.ios && !push.standalone)">这个浏览器收不了网页通知（要 https，或者换个浏览器）。</p>
+            <p class="status-line needs" x-show="!miniApp && !push.native && !push.supported && push.ios && !push.standalone">iPhone 和 iPad：先在 Safari 里点「分享 → 添加到主屏幕」，从主屏幕打开，再来这里开通知。</p>
+            <p class="status-line" x-show="!miniApp && !push.native && !push.supported && !(push.ios && !push.standalone)">这个浏览器收不了网页通知（要 https，或者换个浏览器）。</p>
             <template x-if="!miniApp && push.supported">
               <div class="inline">
                 <span x-text="push.on ? '这台设备：开着' : '这台设备：没开'"></span><span class="spacer"></span>
@@ -892,6 +892,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
                 <button class="icon-btn sm" type="button" x-show="push.on" :disabled="push.busy" @click="disablePush()" title="关掉通知" aria-label="关掉通知"><i class="i i-bell-off" aria-hidden="true"></i></button>
               </div>
             </template>
+            <p class="status-line" x-show="push.native && push.pending">正在等待系统登记通知…</p>
             <p class="hint" x-show="push.devices" x-text="'一共 ' + push.devices + ' 台设备开着通知。'"></p>
             <p class="error" x-show="push.error" x-text="push.error"></p>
           </div>

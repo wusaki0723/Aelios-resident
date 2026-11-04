@@ -79,6 +79,7 @@ import { letterDeliveryStatus, letterWriteStatus } from "./letter-status";
 import { PICTURE_SEND_BYTES, base64, shrinkWith, withPictures, type Download } from "./pictures";
 import { MEDIA_MAX_BYTES, MediaStore, type MediaFile } from "./media-store";
 import { makePushKeys, pushTargetOf, sendPush, type PushKeys, type PushTarget } from "./web-push";
+import { FcmClient, fcmTokenOf } from "./fcm";
 import { REFUSED_PICTURE, refusalOf, refusedNotice, withoutRefused } from "./refused-pictures";
 import {
   TELEGRAM_WEBHOOK_PATH,
@@ -564,6 +565,9 @@ export class Resident extends Think<Env> {
   #usageLabels = new Map<string, UsageLabel>();
   #usageStore: UsageStore | null = null;
   #groupStore: GroupStore | null = null;
+
+  // Completed OAuth credentials are cached only for this object lifetime.
+  private fcmClient = new FcmClient();
 
   // Lazily created once per object lifetime; mark ready only after the DDL succeeds.
   private turnTableReady = false;
@@ -4224,7 +4228,7 @@ export class Resident extends Think<Env> {
   }
 
 
-  // ---- web push to the devices that turned it on (web-push.ts) ----
+  // ---- browser and native push to the devices that turned it on ----
 
   /** The VAPID key pair this resident signs pushes with: made once, kept in storage. */
   private async pushKeys(): Promise<PushKeys> {
@@ -4282,6 +4286,34 @@ export class Resident extends Think<Env> {
     if (this.residentId === DEFAULT_RESIDENT) this.pushDeviceDrop(endpoint);
     else await (await this.pushHome()).pushDeviceDrop(endpoint);
     return this.webPush();
+  }
+
+  /** Native tokens share the site's existing device table and limit with browser subscriptions.
+   * The fcm: prefix cannot be a validated HTTPS Web Push endpoint; its key columns stay empty.
+   */
+  async nativePushSubscribe(value: unknown, previous?: unknown): Promise<Awaited<ReturnType<Resident["webPush"]>> | { error: string }> {
+    const token = fcmTokenOf(value);
+    const old = previous === undefined ? null : fcmTokenOf(previous);
+    if (!token || (previous !== undefined && !old)) return { error: "这台设备给的推送令牌不对" };
+    if (this.residentId === DEFAULT_RESIDENT) this.nativePushDeviceAdd(token, old ?? undefined);
+    else await (await this.pushHome()).nativePushDeviceAdd(token, old ?? undefined);
+    return this.webPush();
+  }
+
+  async nativePushUnsubscribe(value: unknown): Promise<Awaited<ReturnType<Resident["webPush"]>> | { error: string }> {
+    const token = fcmTokenOf(value);
+    if (!token) return { error: "这台设备给的推送令牌不对" };
+    if (this.residentId === DEFAULT_RESIDENT) this.pushDeviceDrop(`fcm:${token}`);
+    else await (await this.pushHome()).pushDeviceDrop(`fcm:${token}`);
+    return this.webPush();
+  }
+
+  nativePushDeviceAdd(token: string, previous?: string): void {
+    if (this.residentId !== DEFAULT_RESIDENT) throw new Error("only the default resident keeps the devices");
+    if (!fcmTokenOf(token) || (previous !== undefined && !fcmTokenOf(previous))) throw new Error("invalid native token");
+    this.pushTargets();
+    if (previous && previous !== token) this.pushDeviceDrop(`fcm:${previous}`);
+    this.pushDeviceAdd({ endpoint: `fcm:${token}`, keys: { p256dh: "", auth: "" } });
   }
 
   /** The default resident's device list, for the others. */
@@ -4347,7 +4379,10 @@ export class Resident extends Think<Env> {
     let sent = 0;
     const failed: string[] = [];
     for (const target of targets) {
-      const result = await sendPush(target, payload, keys, subject, options);
+      const result = target.endpoint.startsWith("fcm:")
+        ? await this.fcmClient.send(this.env.FCM_SERVICE_ACCOUNT, target.endpoint.slice(4), payload, options)
+        : await sendPush(target, payload, keys, subject, options);
+      if ("skipped" in result) continue;
       if ("ok" in result) sent += 1;
       else if ("gone" in result) this.sql`DELETE FROM res_push_targets WHERE endpoint = ${target.endpoint}`;
       else {
