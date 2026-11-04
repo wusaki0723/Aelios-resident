@@ -183,4 +183,13 @@ await test('cleanup failure on reload and logout is visible without leaking raw 
   assert.ok(h.notices.some((n) => n.includes('退出登录时未能关闭服务器通知')));
   assert.ok(!h.notices.join(' ').includes('private-network-error'));
 });
+await test('a Worker without the FCM secret says so and offers no switch', async () => {
+  const h = harness();
+  h.respond = async () => ({ ok: true, json: async () => ({ devices: 0, native: false }) });
+  await h.page.loadPushState();
+  assert.equal(h.page.push.supported, false); assert.equal(h.page.push.on, false);
+  assert.match(h.page.push.error, /FCM_SERVICE_ACCOUNT/);
+  assert.equal(h.counts.request, 0); assert.equal(h.counts.register, 0);
+  assert.ok(h.calls.every((c) => c.url.endsWith('/web/push')));
+});
 console.log(`${passed} native push frontend regression groups passed`);

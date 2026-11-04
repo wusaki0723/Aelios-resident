@@ -2720,6 +2720,12 @@ function resident() {
       try {
         var data = await this.api('/web/push');
         this.push.devices = nativeCount(data);
+        // The Worker has no FCM secret: nothing would reach this app, so it cannot be turned on here.
+        if (this.push.native && this.push.supported && data.native === false) {
+          this.push.supported = false;
+          this.push.on = false;
+          this.push.error = '服务器还没配安卓通知（FCM_SERVICE_ACCOUNT）';
+        }
       } catch (e) {}
       if (!this.push.supported) return;
       if (this.push.native) {

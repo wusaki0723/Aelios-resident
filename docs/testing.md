@@ -219,6 +219,6 @@ UI 按以下合同读取状态，写信结果与送达结果互不替代。
 
 ## Android 原生推送
 
-新增 `node test/fcm.mjs`（HTTP v1、内存 RSA 签名、OAuth 缓存和失效 token）、`node test/native-push.mjs`（实际 Resident 方法与 SQLite、两通道发送及策略）、`node test/native-push-ui.mjs`（模拟 Capacitor 的实际页面函数）。已有 `web-push.mjs`、`web-ui.mjs` 继续覆盖普通浏览器。真实本地 Worker 路由由 `TEST_BASE_URL=http://127.0.0.1:8787 node test/native-push-worker.mjs` 验证，使用全新隔离状态和无个人环境变量文件的测试目录。详细配置与测试边界见 [native-push.md](native-push.md)。
+新增 `node test/fcm.mjs`（HTTP v1、内存 RSA 签名、OAuth 缓存和失效 token）、`node test/native-push.mjs`（实际 Resident 方法与 SQLite、两通道发送及策略）、`node test/native-push-ui.mjs`（模拟 Capacitor 的实际页面函数）。已有 `web-push.mjs`、`web-ui.mjs` 继续覆盖普通浏览器。真实本地 Worker 路由由 `TEST_BASE_URL=http://127.0.0.1:8787 node test/native-push-worker.mjs` 验证（Worker 启动时加 `--var FCM_SERVICE_ACCOUNT:not-json`），使用全新隔离状态和无个人环境变量文件的测试目录。详细配置与测试边界见 [native-push.md](native-push.md)。
 
 本轮本地检查通过：`npm run typecheck`、FCM 12 项、共用推送 SQLite/策略 5 项、原生前端 15 组、原有 Web Push 6 组和全部 Web UI 测试；真实本地 Worker 的原有 `web` 16 组、`residents` 12 组，以及新增原生推送路由检查均通过。测试 Worker 使用临时目录中的测试配置、源代码链接和独立状态，未加载个人 `.env` / `.dev.vars`。未连接真实 Firebase 或手机，未部署到 Cloudflare。

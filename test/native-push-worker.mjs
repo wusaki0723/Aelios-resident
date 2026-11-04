@@ -1,4 +1,5 @@
 // Real isolated local Worker routes + SQLite. No FCM credentials or external push calls.
+// Start wrangler with --var FCM_SERVICE_ACCOUNT:not-json (any non-empty value; it is never sent anywhere).
 import assert from 'node:assert/strict';
 const base = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:8787');
 assert.ok(base.protocol === 'http:' && ['127.0.0.1','localhost'].includes(base.hostname));
@@ -10,15 +11,17 @@ const prefix='/web/push/native/';
 await call(prefix+'subscribe',{token:'http-fixture'},401,false);
 await call(prefix+'subscribe',{token:'bad\ntoken'},400);
 await call(prefix+'unsubscribe',{token:{}},400);
-assert.equal((await call('/web/push')).devices,0,'fresh isolated Worker');
+const state = await call('/web/push');
+assert.equal(state.devices,0,'fresh isolated Worker');
+assert.equal(state.native,true,'start wrangler with --var FCM_SERVICE_ACCOUNT:not-json');
 assert.equal((await call(prefix+'subscribe',{token:'http-fixture'})).devices,1);
 assert.equal((await call(prefix+'subscribe',{token:'http-fixture'})).devices,1);
 assert.equal((await call(prefix+'subscribe',{token:'http-fixture-new',previousToken:'http-fixture'})).devices,1);
-assert.deepEqual(await call('/web/push/test',{}),{sent:0,failed:[]},'no FCM secret skips safely');
+assert.deepEqual(await call('/web/push/test',{}),{sent:0,failed:['invalid FCM configuration']},'a broken secret is reported, not skipped');
 await call('/web/residents',{id:'native-fixture',name:'Native fixture'});
 assert.equal((await call('/r/native-fixture/web/push')).devices,1);
 assert.equal((await call('/r/native-fixture'+prefix+'subscribe',{token:'second-fixture'})).devices,2);
 assert.equal((await call('/web/push')).devices,2);
 assert.equal((await call('/r/native-fixture'+prefix+'unsubscribe',{token:'http-fixture-new'})).devices,1);
 assert.equal((await call(prefix+'unsubscribe',{token:'second-fixture'})).devices,0);
-console.log('Native push Worker routes: passed (auth, validation, deduplication, rotation, shared residents, missing secret, unregister).');
+console.log('Native push Worker routes: passed (auth, validation, deduplication, rotation, shared residents, broken secret, unregister).');

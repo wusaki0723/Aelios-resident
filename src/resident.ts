@@ -4268,9 +4268,10 @@ export class Resident extends Think<Env> {
   }
 
   /** The settings page's 通知: the key a device subscribes with, and how many devices have. */
-  async webPush(): Promise<{ publicKey: string; devices: number; mode: "on" | "always" | "off" }> {
+  async webPush(): Promise<{ publicKey: string; devices: number; mode: "on" | "always" | "off"; native: boolean }> {
     const devices = this.residentId === DEFAULT_RESIDENT ? this.pushTargets().length : await (await this.pushHome()).pushDevices();
-    return { publicKey: (await this.pushKeys()).publicKey, devices, mode: this.pushMode() };
+    // native: the Worker can send to the Android app (FCM_SERVICE_ACCOUNT is set).
+    return { publicKey: (await this.pushKeys()).publicKey, devices, mode: this.pushMode(), native: Boolean(this.env.FCM_SERVICE_ACCOUNT?.trim()) };
   }
 
   /** A device that turned notifications on (its PushSubscription). The oldest goes when there are too many. */
@@ -4295,6 +4296,8 @@ export class Resident extends Think<Env> {
     const token = fcmTokenOf(value);
     const old = previous === undefined ? null : fcmTokenOf(previous);
     if (!token || (previous !== undefined && !old)) return { error: "这台设备给的推送令牌不对" };
+    // Without the secret nothing would reach it: do not let it look turned on or take a device's place.
+    if (!this.env.FCM_SERVICE_ACCOUNT?.trim()) return { error: "服务器还没配安卓通知（FCM_SERVICE_ACCOUNT）" };
     if (this.residentId === DEFAULT_RESIDENT) this.nativePushDeviceAdd(token, old ?? undefined);
     else await (await this.pushHome()).nativePushDeviceAdd(token, old ?? undefined);
     return this.webPush();

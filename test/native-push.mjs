@@ -83,3 +83,11 @@ test('expired native devices are deleted while transient errors retain devices a
   const response=await home.pushToDevices('{}',{urgency:'high',topic:'chat'});
   assert.equal(response.sent,1); assert.deepEqual(response.failed,['FCM unavailable']); assert.equal(home.pushDevices(),2);
 });
+test('without the FCM secret a native device cannot sign up, and the page is told', async t => {
+  const home = fixture(t); home.env.FCM_SERVICE_ACCOUNT = '';
+  assert.match((await home.nativePushSubscribe('native:token')).error, /FCM_SERVICE_ACCOUNT/);
+  assert.equal(home.pushDevices(), 0);
+  assert.equal((await home.webPush()).native, false);
+  home.env.FCM_SERVICE_ACCOUNT = 'synthetic';
+  assert.equal((await home.webPush()).native, true);
+});
