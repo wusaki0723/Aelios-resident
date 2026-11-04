@@ -52,7 +52,6 @@ await test('native enables via permission/register and root native route, never 
   for (const call of h.calls) {
     assert.equal(call.url, '/web/push/native/subscribe');
     assert.deepEqual(JSON.parse(call.options.body), { token: 'token-a' });
-    assert.equal(call.options.redirect, 'error');
     assert.equal(call.options.headers['x-web-key'], 'synthetic-session-key');
   }
   assert.equal(h.counts.web, 0);
@@ -111,39 +110,26 @@ await test('subscribe failure leaves token retryable, refresh retries with safe 
   await h.page.enablePush(); await tick();
   assert.equal(h.page.push.on, false); assert.match(h.page.push.error, /登记失败/);
   assert.ok(!h.page.push.error.includes('network-secret'));
-  h.respond = async () => ({ ok: true, json: async () => ({ count: 4 }) });
+  h.respond = async () => ({ ok: true, json: async () => ({ devices: 4 }) });
   h.bridge.token = ''; await h.page.loadPushState();
   assert.equal(h.page.push.on, true); assert.equal(h.page.push.devices, 4);
 });
-await test('logout blocks late events and removes enrollment using only the former session', async () => {
+await test('after logout a late token event signs nothing up', async () => {
   const h = harness(); await h.page.enablePush(); h.calls.length = 0;
-  h.page.logout(); await tick();
+  h.page.logout(); await h.emit('registration', { value: 'after-logout' });
   assert.equal(h.page.key, ''); assert.equal(h.page.authed, false);
-  assert.equal(h.page.push.on, false);
-  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, '/web/push/native/unsubscribe');
-  assert.equal(h.calls[0].options.headers['x-web-key'], 'synthetic-session-key');
-  await h.emit('registration', { value: 'after-logout' });
-  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls.length, 0);
   assert.ok(!JSON.stringify([...h.store]).includes('synthetic-session-key'));
 });
-await test('in-flight subscribe finishes before logout cleanup, and never reopens the toggle', async () => {
-  const h = harness(); h.bridge.token = ''; await h.page.enablePush();
-  let finish;
-  h.respond = (url) => url.endsWith('/subscribe') ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve({ ok: true, json: async () => ({ devices: 0 }) });
-  await h.emit('registration', { value: 'in-flight-token' }); assert.ok(finish);
-  h.page.logout();
-  finish({ ok: true, json: async () => ({ devices: 1 }) }); await tick();
-  assert.deepEqual(h.calls.map((c) => c.url), ['/web/push/native/subscribe', '/web/push/native/unsubscribe']);
-  assert.equal(h.page.push.on, false); assert.equal(h.store.get('resident.push.native.registered'), '');
-});
-await test('failed disable remains off after reload and retries removal rather than registration', async () => {
+await test('a turn-off the server did not hear stays on and says so', async () => {
   const h = harness(); await h.page.enablePush();
   h.respond = async () => ({ ok: false, json: async () => ({ error: 'secret-response' }) });
-  await h.page.disablePush(); assert.match(h.page.push.error, /关闭通知同步失败/);
-  const next = harness({ store: h.store }); await next.page.loadPushState();
-  assert.equal(next.counts.register, 0); assert.equal(next.page.push.on, false);
-  assert.equal(next.calls.at(-1).url, '/web/push/native/unsubscribe');
-  assert.equal(next.store.get('resident.push.native.cleanup'), '');
+  await h.page.disablePush();
+  assert.match(h.page.push.error, /关闭通知同步失败/); assert.ok(!h.page.push.error.includes('secret-response'));
+  assert.equal(h.page.push.on, true); assert.equal(h.store.get('resident.push.native.enabled'), 'yes');
+  h.respond = async () => ({ ok: true, json: async () => ({ devices: 0 }) });
+  await h.page.disablePush();
+  assert.equal(h.page.push.on, false); assert.equal(h.calls.at(-1).url, '/web/push/native/unsubscribe');
 });
 await test('browser Capacitor shim preserves Web Push detection and missing native plugin reports error', async () => {
   const web = harness({ native: false }); await web.page.loadPushState();
@@ -161,27 +147,6 @@ await test('logout during permission checking cannot prompt or register later', 
   assert.equal(h.counts.request, 0); assert.equal(h.counts.register, 0);
   assert.equal(h.page.push.on, false);
   assert.ok(h.calls.every((c) => !c.url.endsWith('/subscribe')));
-});
-await test('failed listener installation retries without duplicating successful listener', async () => {
-  const h = harness(); let rejectOnce = true;
-  const original = h.bridge.addListener;
-  h.bridge.addListener = async function (name, fn) {
-    if (name === 'registrationError' && rejectOnce) { rejectOnce = false; throw Error('private-bridge-error'); }
-    return original.call(this, name, fn);
-  };
-  await tick(); await h.page.enablePush();
-  assert.equal(h.listeners.registration.length, 1);
-  assert.equal(h.listeners.registrationError.length, 1);
-  assert.equal(h.page.push.on, true);
-});
-await test('cleanup failure on reload and logout is visible without leaking raw errors', async () => {
-  const h = harness(); await h.page.enablePush();
-  h.respond = async () => { throw Error('private-network-error'); };
-  await h.page.disablePush(); await h.page.loadPushState();
-  assert.match(h.page.push.error, /关闭通知尚未同步/);
-  h.page.logout(); await tick();
-  assert.ok(h.notices.some((n) => n.includes('退出登录时未能关闭服务器通知')));
-  assert.ok(!h.notices.join(' ').includes('private-network-error'));
 });
 await test('a Worker without the FCM secret says so and offers no switch', async () => {
   const h = harness();

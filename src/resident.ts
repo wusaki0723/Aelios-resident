@@ -4313,8 +4313,6 @@ export class Resident extends Think<Env> {
 
   nativePushDeviceAdd(token: string, previous?: string): void {
     if (this.residentId !== DEFAULT_RESIDENT) throw new Error("only the default resident keeps the devices");
-    if (!fcmTokenOf(token) || (previous !== undefined && !fcmTokenOf(previous))) throw new Error("invalid native token");
-    this.pushTargets();
     if (previous && previous !== token) this.pushDeviceDrop(`fcm:${previous}`);
     this.pushDeviceAdd({ endpoint: `fcm:${token}`, keys: { p256dh: "", auth: "" } });
   }
