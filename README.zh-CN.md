@@ -453,7 +453,7 @@ Telegram（选装）──▶ Worker（验 secret、白名单、命令）──�
 - **GitHub Actions**（要跑命令、跑测试、开 PR 时）：有完整的 Linux，在住户替你在 GitHub 上建的一个私有仓库里跑。只要填一个 token。
 - **claude.ai 定时任务**（有 Claude 订阅时）：每单开一个云端 Claude Code 会话，用你的订阅额度。接了它以后，活默认交给它，轻活住户也可以留给自己的线程。
 
-第四个地方 **你自己的电脑** 还在开发：通过 DSH 桌面应用，把活交给一个只能列出和读取你选的一个文件夹的小帮手，而且只在你明确要在那台电脑上干活时才派。它的插件还没公开，现在装不了。怎么用、有哪些限制见 [DSH 桌面说明](docs/dsh-desktop.md)。
+第四个地方 **你自己的电脑** 还在开发：通过 DSH 桌面应用和它的插件（[源码](https://github.com/Aelios-project/dsh-plugin-aelios-resident)，还没上 npm），把活交给你选的一个文件夹里的小帮手，而且只在你明确要在那台电脑上干活时才派。权限在那台电脑上给：只读，或者能改文件、跑命令的完整权限。怎么用、有哪些限制见 [DSH 桌面说明](docs/dsh-desktop.md)。
 
 住户自己这里和 GitHub Actions 上的线程用**线程的模型**：默认是 Workers AI 的 `@cf/zai-org/glm-4.7-flash`（每天有免费额度），想换就在「线程用哪个模型」里填（`CLOUD_TASK_MODEL`）。线程不会自己去用聊天的模型，贵的聊天模型不会花在跑腿上。
 

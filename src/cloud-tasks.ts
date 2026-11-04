@@ -415,12 +415,14 @@ export const TASK_DESCRIPTION =
   "- linux: a GitHub Actions run on their GitHub account, with a shell: installing, building, running tests, opening " +
   "pull requests; name the repository to change in repo.\n" +
   "- desktop: a background DSH session on their explicitly paired computer, in the workspace and permissions they " +
-  "approve locally. It can only list and read workspace files, not write, run commands or delegate. " +
+  "approve locally. A full-access helper can read and write files, run commands, install dependencies and use its " +
+  "DSH tools; older read-only grants remain read-only until they explicitly upgrade them in DSH. " +
   "Pick it only when they ask for work on that computer; it waits while the device is offline. " +
   "Never substitute a cloud executor for desktop, or use local to mean their computer.\n" +
   "Leave execution out and it goes where they want jobs to go: claude.ai when it is set up, otherwise a thread here. " +
-  "Pick local for reading and writing that needs no repository. When the job needs a shell, pick external or linux: " +
-  "it goes to whichever of the two is set up. The answer says where it went, or which places are set up.";
+  "Pick local for reading and writing that needs no repository. For a shell on their own computer, explicitly pick desktop " +
+  "when they ask and have granted full access; otherwise pick external or linux, whichever is set up. " +
+  "The answer says where it went, or which places are set up.";
 
 // ---- the tasks, in the resident's own SQLite ----
 
