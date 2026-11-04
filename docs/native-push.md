@@ -17,7 +17,9 @@ Capacitor 原生壳使用 `window.Capacitor.Plugins.PushNotifications`，普通�
    这是线上操作，只在你准备上线时执行。Worker 名称来自仓库的 `wrangler.jsonc`。未设置 secret 时会直接跳过 FCM，Web Push 继续发送。配置错误则报告固定的发送失败信息，不回显账号、私钥、设备 token 或服务端原文。
 
 6. 在壳目录重新执行构建脚本，例如 `./build-debug.sh`（先运行 `npm ci` 恢复依赖）。`cap sync android` 将插件配置同步到工程。安装新 APK 后，在通知设置里开启系统权限（Android 13 及以上需要授权）。
-7. 准备好上线时，在 Worker 仓库确认 `git branch --show-current` 为 `native-push`，运行 `npm ci`、`npm run typecheck` 和本文的相关测试，再执行仓库约定的 `npm run deploy`。此命令会把当前分支部署到现有 Worker；不需要先 merge 或 push。注意仓库如已接入 Cloudflare Builds，向默认分支推送可能触发自动部署。
+7. Worker 已关联 Git 仓库并启用自动部署时，将原生推送改动通过 PR 合并到 Cloudflare Builds 配置的生产分支（通常为 `main`），然后在 Cloudflare 控制台确认该提交构建、部署成功。这个流程不需要在本机执行 `npm run deploy`；本地提交、功能分支或未合并的 PR 不代表生产环境已经更新，非生产分支可能只生成预览版本。未配置自动部署的项目，才按仓库约定从已验证的版本执行 `npm run deploy`。
+
+代码上线和 Firebase 配置是两步：`FCM_SERVICE_ACCOUNT` 要设置在实际运行的 Worker 的运行时 Secrets 中，仅放在 Builds 的构建环境变量里无法供运行时发送推送使用。Android 端也必须放好同一 Firebase 项目的 `google-services.json` 并重打 APK。两端就绪后，在 App 的通知设置里启用并点击“试一下”，确认真实送达；单纯合并 PR 不会自动补齐 Firebase 配置。
 
 ## 接口与设备名单
 
