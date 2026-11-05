@@ -686,14 +686,14 @@ const listed = [
 ];
 
 const plain = pickerPage();
-assert.equal(plain.canon('anthropic/claude-opus-5.5'), 'anthropic/claude-opus-5-5');
-assert.equal(plain.canon('Anthropic/claude-opus-5.5'), 'anthropic/claude-opus-5-5');
+assert.equal(plain.canon('anthropic/claude-opus-5.5'), 'anthropic/claude-opus-5.5');
 assert.equal(plain.canon('@cf/zai-org/glm-4.7-flash'), 'workers-ai/@cf/zai-org/glm-4.7-flash');
 assert.equal(plain.canon('custom-relay/anthropic/claude-sonnet-4.5'), 'custom-relay/anthropic/claude-sonnet-4.5');
-assert.equal(plain.same('anthropic/claude-opus-5.5', 'anthropic/claude-opus-5-5'), true);
+assert.equal(plain.same('anthropic/claude-opus-5.5', 'anthropic/claude-opus-5-5'), false, 'two spellings are two ids: neither is swapped for the other');
+assert.equal(plain.same('@cf/zai-org/glm-4.7-flash', 'workers-ai/@cf/zai-org/glm-4.7-flash'), true);
 assert.equal(plain.same('openai/gpt-5', 'openai/gpt-4'), false);
 assert.equal(plain.same('', ''), false);
-console.log('PASS one model spelled with dots or dashes counts as one, the way Aelios names it');
+console.log('PASS an id is only the same id when it is the same string');
 
 assert.equal(plain.pickerMode(), 'catalog');
 assert.equal(plain.pickerNote(), '');
@@ -711,7 +711,7 @@ console.log('PASS while Aelios is being asked the picker shows what is in use, n
 const curated = pickerPage({ aelios: true, aeliosModels: aeliosList(listed), model: { ...plain.model, model: 'chatgpt/gpt-5', recent: ['openai/gpt-5'] } });
 assert.equal(curated.pickerMode(), 'aelios');
 assert.deepEqual(titles(curated), ['正在用', '最近用过', '常用', 'openrouter'], 'the model in use and the favourite are not listed a second time under their own provider');
-assert.deepEqual(ids(curated, '常用'), ['anthropic/claude-opus-5.5'], 'a favourite is shown when Aelios lists it, whichever way it is spelled');
+assert.deepEqual(ids(curated, '常用'), ['anthropic/claude-opus-5-5'], 'a favourite Aelios lists is shown under the id Aelios lists it by');
 assert.equal(curated.pickerGroups().find((group) => group.title === '常用').items[0].main, true);
 assert.deepEqual(ids(curated, 'openrouter'), ['openrouter/openai/gpt-6.1-sol:floor']);
 assert.equal(curated.pickerGroups().find((group) => group.title === 'openrouter').items[0].main, false, 'a model that would not remember is marked');
@@ -730,8 +730,25 @@ searching.picker.q = 'custom-mine/tiny';
 assert.deepEqual(titles(searching), ['目录里没有'], 'an id nobody lists can still be typed in');
 assert.deepEqual(ids(searching, '目录里没有'), ['custom-mine/tiny']);
 searching.picker.q = 'anthropic/claude-opus-5.5';
-assert.ok(!titles(searching).includes('目录里没有'), 'the same model spelled another way is not "not listed"');
-console.log('PASS search runs over Aelios\' list (dots or dashes), and a typed id it does not list is still offered');
+assert.equal(searching.flatPicker()[0].id, 'anthropic/claude-opus-5.5', 'a typed id comes first, exactly as typed, even when Aelios lists another spelling');
+assert.deepEqual(ids(searching, '搜到的'), ['anthropic/claude-opus-5-5'], 'and the listed spelling is still there to pick');
+searching.picker.q = 'anthropic/claude-opus-5-5';
+assert.ok(!titles(searching).includes('目录里没有'), 'an id Aelios lists exactly is not "not listed"');
+assert.equal(searching.flatPicker()[0].id, 'anthropic/claude-opus-5-5');
+console.log('PASS search runs over Aelios\' list (dots or dashes), and a typed id comes first as typed');
+
+// Cloudflare's catalog, which Aelios hands over when no list is saved, has odd entries for the same model: the nearest
+// one is picked, not the first in the catalog's order.
+const odd = ['anthropic/anthropic/claude-opus-5.5-fast', 'anthropic/claude-opus-5-5-fast', 'anthropic/anthropic/claude-opus-5.5',
+  'anthropic/claude-opus-5-5', 'anthropic/claude-opus-5.5:batch', 'anthropic/claude-opus-5.5', 'openrouter/anthropic/claude-opus-5.5']
+  .map((id) => ({ id, owner: id.split('/')[0] }));
+const catalogSearch = pickerPage({ aelios: true, aeliosModels: aeliosList([...odd, ...Array.from({ length: 150 }, (_, i) => ({ id: `openrouter/vendor/filler-${i}`, owner: 'openrouter' }))], false) });
+for (const [query, first] of [['claude-opus-5.5', 'anthropic/claude-opus-5.5'], ['opus 5.5', 'anthropic/claude-opus-5.5'],
+  ['claude-opus-5-5', 'anthropic/claude-opus-5-5'], ['anthropic/claude-opus-5.5', 'anthropic/claude-opus-5.5']]) {
+  catalogSearch.picker.q = query;
+  assert.equal(catalogSearch.flatPicker()[0].id, first, query);
+}
+console.log('PASS in Cloudflare\'s catalog a search picks the plain id, not …-fast, …:batch or anthropic/anthropic/…');
 
 const everything = Array.from({ length: 200 }, (_, i) => ({ id: `openrouter/vendor/model-${i}`, owner: 'openrouter' }));
 const huge = pickerPage({ aelios: true, aeliosModels: aeliosList(everything, false) });
@@ -774,9 +791,17 @@ console.log('PASS the list is fetched from /web/models only when Aelios is conne
 const same = pickerPage({ model: { ...plain.model, model: 'anthropic/claude-opus-5.5' } });
 same.api = async () => { throw new Error('picking the model already in use must not try it again'); };
 same.picker.open = true;
-await same.chooseModel('anthropic/claude-opus-5-5');
+await same.chooseModel('anthropic/claude-opus-5.5');
 assert.equal(same.picker.open, false);
-console.log('PASS choosing the model already in use, spelled the other way, just closes the picker');
+const other = pickerPage({ model: { ...plain.model, model: 'anthropic/claude-opus-5.5' } });
+const posted = [];
+other.api = async (path, init) => { posted.push([path, init?.body?.text]); return { ...plain.model, model: init.body.text }; };
+other.refresh = async () => {};
+other.notify = () => {};
+other.picker.open = true;
+await other.chooseModel('anthropic/claude-opus-5-5');
+assert.deepEqual(posted, [['/web/model', 'anthropic/claude-opus-5-5']], 'another spelling is another pick, saved exactly as picked');
+console.log('PASS choosing the model in use just closes the picker; another spelling is saved as picked');
 
 
 // The usage timeline: a row on the profile page opens it; three sums on top, then one row per call.

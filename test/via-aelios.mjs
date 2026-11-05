@@ -30,14 +30,29 @@ function test(name, fn) {
 const note = "(Not from them: a scheduled check-in; it is now 10-15 09:00.) If you would like to reach out…";
 const hers = "[10-15 09:01 周四] 早";
 
-test("names: a Workers AI id goes under workers-ai/, Anthropic's own with dashes, the rest as written", () => {
+test("names: what was picked or typed goes to Aelios as it is; only a bare Workers AI id goes under workers-ai/", () => {
   assert.equal(aeliosName("@cf/zai-org/glm-4.7-flash"), "workers-ai/@cf/zai-org/glm-4.7-flash");
-  assert.equal(aeliosName("anthropic/claude-opus-5.5"), "anthropic/claude-opus-5-5");
-  assert.equal(aeliosName("anthropic/claude-opus-5-5"), "anthropic/claude-opus-5-5");
-  assert.equal(aeliosName("anthropic/claude-haiku-4.5-20251001"), "anthropic/claude-haiku-4-5-20251001");
-  // Another provider's own spelling is left alone (OpenRouter writes claude-sonnet-4.5).
-  assert.equal(aeliosName("custom-relay/anthropic/claude-sonnet-4.5"), "custom-relay/anthropic/claude-sonnet-4.5");
-  assert.equal(aeliosName("custom-nous/hermes"), "custom-nous/hermes");
+  assert.equal(aeliosName("workers-ai/@cf/zai-org/glm-4.7-flash"), "workers-ai/@cf/zai-org/glm-4.7-flash");
+  for (const id of ["anthropic/claude-opus-5.5", "anthropic/claude-opus-5-5", "anthropic/claude-haiku-4.5-20251001",
+    "custom-relay/anthropic/claude-sonnet-4.5", "custom-nous/hermes", "openai/gpt-6.1-terra"]) {
+    assert.equal(aeliosName(id), id);
+  }
+});
+
+test("the model goes to Aelios under exactly the name it was picked by", async () => {
+  const real = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(init.body).model);
+    return Response.json({ id: "m", type: "message", role: "assistant", model: "x", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } });
+  };
+  try {
+    const memory = { url: "https://a.example", key: "k", namespace: "default", identity: "" };
+    for (const id of ["anthropic/claude-opus-5.5", "anthropic/claude-opus-5-5"]) {
+      await aeliosModel(memory, id, { auxiliary: true }).doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: "ok" }] }] });
+    }
+    assert.deepEqual(sent, ["anthropic/claude-opus-5.5", "anthropic/claude-opus-5-5"]);
+  } finally { globalThis.fetch = real; }
 });
 
 test("Messages for anthropic/ and anything with claude in it; chat completions for the rest", () => {

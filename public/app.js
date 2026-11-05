@@ -1554,23 +1554,27 @@ function resident() {
       var parts = id.split('/');
       return parts[parts.length - 1];
     },
-    // The model name as Aelios takes it (the same rewrites as aeliosName in src/via-aelios.ts), so one model written two
-    // ways (Cloudflare's anthropic/claude-opus-5.5, Aelios' anthropic/claude-opus-5-5) counts as one.
+    // Two ids are one model only when they are the same string (a Workers AI id with or without workers-ai/ aside, the
+    // way aeliosName in src/via-aelios.ts sends it). The picker never swaps what was picked or typed for another spelling:
+    // the id goes to Aelios exactly as Aelios listed it or as it was typed.
     canon(id) {
-      if (id.indexOf('@cf/') === 0) return 'workers-ai/' + id;
-      var anthropic = id.match(/^anthropic\/(.+)$/i);
-      return anthropic ? 'anthropic/' + anthropic[1].replace(/\./g, '-') : id;
+      return id.indexOf('@cf/') === 0 ? 'workers-ai/' + id : id;
     },
     same(a, b) { return Boolean(a) && Boolean(b) && this.canon(a) === this.canon(b); },
+    // Only for showing things: a version written with dots or dashes (anthropic/claude-opus-5.5, …-5-5) is looked up as one,
+    // so the shipped catalog can describe a listed model and a favourite finds the entry Aelios lists for it.
+    looseKey(id) { return this.canon(id).toLowerCase().replace(/\./g, '-'); },
+    // The entry Aelios lists under this exact id, else under the same id spelled with dots or dashes.
     aeliosEntry(id) {
       var items = this.aeliosModels.items;
       for (var i = 0; i < items.length; i++) if (this.same(items[i].id, id)) return items[i];
+      for (var j = 0; j < items.length; j++) if (id && this.looseKey(items[j].id) === this.looseKey(id)) return items[j];
       return null;
     },
     // A name and a line of description from the shipped catalog, when it knows the model.
     describe(item) {
       for (var i = 0; i < this.catalog.length; i++) {
-        if (this.same(this.catalog[i].id, item.id)) return Object.assign({}, item, { name: this.catalog[i].name, desc: this.catalog[i].desc });
+        if (this.looseKey(this.catalog[i].id) === this.looseKey(item.id)) return Object.assign({}, item, { name: this.catalog[i].name, desc: this.catalog[i].desc });
       }
       return item;
     },
@@ -1637,7 +1641,8 @@ function resident() {
         group('正在用', [this.entry(this.currentModel())]);
         group('最近用过', (this.model.recent || []).map(function (id) { return self.entry(id); }));
         if (mode === 'aelios') {
-          group('常用', FAVORITES.filter(function (id) { return self.aeliosEntry(id); }).map(function (id) { return self.entry(id); }));
+          // A favourite Aelios lists, under the id Aelios lists it by: that is the one sent.
+          group('常用', FAVORITES.map(function (id) { return self.aeliosEntry(id); }).filter(Boolean).map(function (listed) { return self.entry(listed.id); }));
           var list = this.aeliosModels;
           if (list.curated || list.items.length <= BROWSE_MAX) {
             byProvider(list.items.map(function (model) { return self.describe(self.listed(model)); }), function (item) { return item.provider || '其他'; });
@@ -1666,7 +1671,13 @@ function resident() {
         if (name.indexOf(q) === 0 || id.indexOf(q) === 0) return 1;
         return 2;
       }
-      hits.sort(function (a, b) { return rank(a) - rank(b); });
+      // Among equals: one that has the words as typed (not only with dots and dashes swapped), then the shortest id,
+      // so anthropic/claude-opus-5.5 comes before anthropic/anthropic/claude-opus-5.5, …-fast and …:batch.
+      function literal(item) {
+        var hay = (item.id + ' ' + item.name + ' ' + item.provider).toLowerCase();
+        return words.every(function (word) { return hay.indexOf(word) >= 0; }) ? 0 : 1;
+      }
+      hits.sort(function (a, b) { return rank(a) - rank(b) || literal(a) - literal(b) || a.id.length - b.id.length; });
       var raw = this.picker.q.trim();
       var exact = hits.some(function (item) { return self.same(item.id, raw); });
       if (!exact && /^\S+\/\S+$/.test(raw)) group('目录里没有', [{ id: raw, name: raw, provider: '', desc: '', custom: true }]);

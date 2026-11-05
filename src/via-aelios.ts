@@ -3,9 +3,11 @@
 // records the exchange for Dream, and calls the model with the providers and keys set up there.
 //   Claude        anthropic/… or any id with "claude" in it goes on the Messages API, so the prompt cache works:
 //                 Aelios puts the cache marker on her message and its recall after it, so the earlier turns are
-//                 still read from the cache. Anthropic's own API spells versions with dashes (claude-opus-5-5), so
-//                 Cloudflare's dotted ids (anthropic/claude-opus-5.5) are rewritten for it.
-//   anything else chat completions, under the name Aelios gives it (a Workers AI id goes under workers-ai/)
+//                 still read from the cache.
+//   anything else chat completions.
+// The model goes under the name Aelios lists it by, or the one typed in, as it is: the resident is one more client of
+// Aelios, and how a provider spells a version (claude-opus-5.5 or 5-5) is Aelios' business. Only the resident's own
+// default, a Workers AI id written the way the AI binding takes it (@cf/…), goes under workers-ai/, as Aelios lists it.
 // The system's own notes (the handoff letter, a check-in) and the trial call when a model is picked are marked
 // auxiliary: Aelios neither recalls for them nor records them as something she said.
 // On the Messages API the conversation's calls also ask for Claude's thinking to be shown and carry
@@ -30,12 +32,9 @@ export const MEMORY_HEADER = "x-aelios-memory";
  */
 export const REQUEST_ID_HEADER = "x-aelios-request-id";
 
-/** The model name as Aelios takes it. */
+/** The model name as Aelios takes it: as picked or typed, a bare Workers AI id under workers-ai/. */
 export function aeliosName(id: string): string {
-  if (id.startsWith("@cf/")) return `workers-ai/${id}`;
-  // Aelios sends anthropic/… to Anthropic's own endpoint with the name after the slash, which has no dots.
-  const anthropic = id.match(/^anthropic\/(.+)$/i);
-  return anthropic ? `anthropic/${anthropic[1].replace(/\./g, "-")}` : id;
+  return id.startsWith("@cf/") ? `workers-ai/${id}` : id;
 }
 
 /**
