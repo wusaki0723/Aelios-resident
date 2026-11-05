@@ -9,7 +9,7 @@ mkdirSync("node_modules/.cache", { recursive: true });
 const dir = mkdtempSync(join("node_modules/.cache", "resident-via-aelios-"));
 const out = join(dir, "via-aelios.mjs");
 await build({ entryPoints: ["src/via-aelios.ts", "src/thinking.ts"], bundle: true, platform: "node", format: "esm", outdir: dir, outExtension: { ".js": ".mjs" }, logLevel: "error" });
-const { aeliosBase, aeliosModel, aeliosName, isAuxiliary, listModels, modelsOf, onMessages } = await import(pathToFileURL(join(process.cwd(), out)).href);
+const { aeliosBase, aeliosModel, aeliosName, isAuxiliary, listModels, modelsOf, onMessages, takesCompletionTokens } = await import(pathToFileURL(join(process.cwd(), out)).href);
 const { claudeOf, effortOf, withThinking } = await import(pathToFileURL(join(process.cwd(), dir, "thinking.mjs")).href);
 rmSync(dir, { recursive: true, force: true });
 
@@ -48,6 +48,35 @@ test("Messages for anthropic/ and anything with claude in it; chat completions f
   assert.equal(onMessages("openai/gpt-5"), false);
   assert.equal(onMessages("custom-nous/hermes"), false);
   assert.equal(onMessages("@cf/zai-org/glm-4.7-flash"), false);
+});
+
+test("OpenAI's own reasoning models take max_completion_tokens; other models and other providers keep max_tokens", () => {
+  for (const name of ["openai/gpt-5.5", "openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5.1-chat-latest", "openai/gpt-6", "openai/o3", "openai/o4-mini", "OpenAI/GPT-5.5"]) {
+    assert.equal(takesCompletionTokens(name), true, name);
+  }
+  for (const name of ["openai/gpt-5-chat-latest", "openai/gpt-4.1", "openai/gpt-4o", "openai/omni-moderation", "openrouter/openai/gpt-5.5", "custom-relay/gpt-5.5", "chatgpt/gpt-5.5", "gpt-5.5"]) {
+    assert.equal(takesCompletionTokens(name), false, name);
+  }
+});
+
+test("the output cap goes to OpenAI's reasoning models as max_completion_tokens, to the others as max_tokens", async () => {
+  const real = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    const message = { role: "assistant", content: "ok" };
+    return Response.json({ id: "c", object: "chat.completion", created: 0, model: "m", choices: [{ index: 0, message, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+  };
+  try {
+    const memory = { url: "https://a.example", key: "k", namespace: "default", identity: "" };
+    const call = (id) => aeliosModel(memory, id, { auxiliary: true }).doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: "ok" }] }], maxOutputTokens: 64 });
+    await call("openai/gpt-5.5");
+    await call("openai/gpt-4.1");
+    assert.equal(sent[0].max_completion_tokens, 64);
+    assert.equal("max_tokens" in sent[0], false);
+    assert.equal(sent[1].max_tokens, 64);
+    assert.equal("max_completion_tokens" in sent[1], false);
+  } finally { globalThis.fetch = real; }
 });
 
 test("the address: /v1 for the key's first identity, /<identity>/v1 for a named one", () => {

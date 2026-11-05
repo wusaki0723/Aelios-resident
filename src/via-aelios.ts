@@ -38,6 +38,21 @@ export function aeliosName(id: string): string {
   return anthropic ? `anthropic/${anthropic[1].replace(/\./g, "-")}` : id;
 }
 
+/**
+ * Whether this is one of OpenAI's own reasoning models (o-series, GPT-5 and later, but not gpt-5-chat), which
+ * refuse max_tokens and want max_completion_tokens. The AI SDK only knows them by their bare name, and through
+ * Aelios they are called openai/…, so the resident swaps the field itself.
+ */
+export function takesCompletionTokens(name: string): boolean {
+  const own = name.match(/^openai\/(.+)$/i)?.[1]?.toLowerCase();
+  if (!own) return false;
+  if (/^o\d+(?:-|$)/.test(own)) return true;
+  const gpt = own.match(/^gpt-(\d+)(?:\.(\d+))?(?:-(.+))?$/);
+  if (!gpt) return false;
+  const chat = gpt[2] === undefined && (gpt[3]?.startsWith("chat") ?? false);
+  return Number(gpt[1]) >= 5 && !chat;
+}
+
 /** Whether Aelios gets this model on the Messages API: Anthropic's, or any Claude through another provider. */
 export function onMessages(id: string): boolean {
   const name = aeliosName(id).toLowerCase();
@@ -124,7 +139,7 @@ export type Thinking = { effort: Effort | null };
 /** The id a reply asked for again goes out with (REQUEST_ID_HEADER), or null. */
 export type Redo = () => string | null;
 
-function sender(messages: boolean, auxiliary: boolean, report?: MemoryReport, thinking?: Thinking, redo?: Redo): typeof fetch {
+function sender(messages: boolean, auxiliary: boolean, report?: MemoryReport, thinking?: Thinking, redo?: Redo, completionTokens = false): typeof fetch {
   return async (input, init) => {
     // Like every request to Aelios: the key is not carried to a redirect target.
     if (typeof init?.body !== "string") return fetch(input, { ...init, redirect: "manual" });
@@ -137,6 +152,10 @@ function sender(messages: boolean, auxiliary: boolean, report?: MemoryReport, th
     // Claude's earlier thinking goes back without its blocks, for the reason in claude-run.ts.
     if (messages) body = withoutOldThinkingIn(body);
     if (messages && thinking) body = withThinking(body, thinking.effort);
+    if (completionTokens && body.max_tokens !== undefined) {
+      const { max_tokens, ...rest } = body;
+      body = { ...rest, max_completion_tokens: rest.max_completion_tokens ?? max_tokens };
+    }
     const response = await fetch(input, { ...init, headers, body: JSON.stringify(body), redirect: "manual" });
     const status = response.headers.get(MEMORY_HEADER);
     if (hers && status && report) report(status);
@@ -156,5 +175,6 @@ export function aeliosModel(
   const name = aeliosName(id);
   const baseURL = aeliosBase(memory);
   if (onMessages(id)) return createAnthropic({ baseURL, apiKey: memory.key, fetch: sender(true, auxiliary, report, thinking, redo) })(name);
-  return createOpenAI({ baseURL, apiKey: memory.key, name: "aelios", fetch: sender(false, auxiliary, report, undefined, redo) }).chat(name);
+  const fetch = sender(false, auxiliary, report, undefined, redo, takesCompletionTokens(name));
+  return createOpenAI({ baseURL, apiKey: memory.key, name: "aelios", fetch }).chat(name);
 }
