@@ -1597,7 +1597,8 @@ function resident() {
       return this.aeliosModels.items.length ? 'aelios' : 'catalog';
     },
     pickerNote() {
-      if (!this.aelios) return '';
+      // Said out loud: half the Aelios settings filled in looks connected, and the chat quietly goes straight to the gateway.
+      if (!this.aelios) return '没连 Aelios：选的模型直接走 Cloudflare 的 AI Gateway，不经过 Aelios，也不想起、不记下旧事。要走 Aelios，设置页的 AELIOS_URL 和 AELIOS_API_KEY 两项都要填。';
       var list = this.aeliosModels;
       if (!list.loaded) return '正在取 Aelios 的模型清单…';
       if (list.error) return 'Aelios 的模型清单没取到（' + list.error + '），先用自带的目录。';
