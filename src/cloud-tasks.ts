@@ -3,7 +3,7 @@
 //
 // - local: a thread of the resident's own (task-worker.ts), a Think child with its own conversation and files,
 //   on the threads' model (Workers AI by default). No subscription or repository needed.
-// - machine: the machine they paired (machine.ts, runner/), which runs a thread as a session of an ACP helper and
+// - machine: the machine they paired (machine.ts; the runner is in Aelios-desktop), which runs a thread as a session of an ACP helper and
 //   answers in it; their own words reach that session directly.
 // - linux: a GitHub Actions run in a private repository the resident sets up with their GitHub token
 //   (hands-repo.ts, public/hands.mjs), for jobs that need a shell: installing things, running tests, opening pull

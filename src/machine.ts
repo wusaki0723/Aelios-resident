@@ -1,4 +1,4 @@
-// The resident's side of aelios-runner/1 (runner/PROTOCOL.md): one paired machine that runs threads through an ACP
+// The resident's side of aelios-runner/1 (Aelios-desktop, packages/runner/PROTOCOL.md): one paired machine that runs threads through an ACP
 // helper. The runner only calls out: it polls for work addressed to a thread, and hands back receipts. Work is a
 // message to a thread: a job the resident sent, a follow-up it mailed (waits its turn), or their own words (say: the
 // running turn stops and the words go to the same session). Which helper, which folder and which permissions are the

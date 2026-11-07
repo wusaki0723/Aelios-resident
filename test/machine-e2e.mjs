@@ -1,20 +1,22 @@
-// End to end: the local Worker, the real runner (runner/) and a pretend ACP helper (runner/test/fake-agent.mjs).
+// End to end: the local Worker, the real runner (Aelios-desktop, packages/runner) and its pretend ACP helper (test/fake-agent.mjs).
 // A job the resident sends goes to the machine and its words come back to the thread; her words to a running thread
 // stop the turn and go into the same session; an ASK: line makes the thread wait for her, and her answer resolves it.
 // The resident only gets a record of it (a note), never a turn of its own.
 // Needs the Worker and the mock server, like test/run.mjs (a fresh Worker: delete .wrangler/state first):
 //   node test/mock-server.mjs & NO_PROXY=127.0.0.1 npx wrangler dev --config wrangler.test.jsonc --port 8787 &
 //   NO_PROXY=127.0.0.1 node test/machine-e2e.mjs
+// The runner is fetched at RUNNER_COMMIT from Aelios-desktop. To use a local copy: RUNNER_DIR=/path/to/Aelios-desktop/packages/runner.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const WORKER = "http://127.0.0.1:8787";
 const KEY = "test-web-key";
-const RUNNER = path.resolve("runner/bin/aelios-runner.mjs");
-const AGENT = path.resolve("runner/test/fake-agent.mjs");
+const RUNNER_REPO = "https://github.com/Aelios-project/Aelios-desktop.git";
+// Pinned to the English runner on the Aelios-desktop branch crew/import-runner (PR #1). Change it to the merge commit on main once PR #1 is merged.
+const RUNNER_COMMIT = "c1d0825748805b52ebe2f01593b0389a30216808";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const web = async (route, body) => {
   const response = await fetch(`${WORKER}${route}`, { method: body ? "POST" : "GET", headers: { "x-web-key": KEY, ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -37,6 +39,18 @@ async function step(name, fn) {
 }
 
 const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), "machine-e2e-")));
+let runnerDir = process.env.RUNNER_DIR && path.resolve(process.env.RUNNER_DIR);
+if (!runnerDir) {
+  const repo = path.join(home, "desktop");
+  const git = (...args) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+  mkdirSync(repo);
+  git("init", "-q");
+  git("fetch", "-q", "--depth", "1", RUNNER_REPO, RUNNER_COMMIT);
+  git("checkout", "-q", "FETCH_HEAD");
+  runnerDir = path.join(repo, "packages", "runner");
+}
+const RUNNER = path.join(runnerDir, "bin", "aelios-runner.mjs");
+const AGENT = path.join(runnerDir, "test", "fake-agent.mjs");
 const store = path.join(home, "agent.json");
 writeFileSync(store, JSON.stringify({ sessions: {}, log: [], n: 0 }));
 const env = { ...process.env, AELIOS_RUNNER_HOME: path.join(home, "runner"), FAKE_STORE: store };
@@ -107,7 +121,7 @@ try {
     const asked = await until(async () => { const v = await threadOf(t.id); return v.status === "needs_you" && v; }, "needs_you");
     assert.equal(asked.tasks.at(-1).waiting, true);
     assert.equal(asked.asks.length, 1);
-    assert.equal(asked.asks[0].question, "我先做哪一个？");
+    assert.equal(asked.asks[0].question, "Which one first?");
     assert.ok((await web("/web/threads")).data.threads.find((x) => x.id === t.id).waiting);
     assert.equal((await web("/web/thread/say", { id: t.id, text: "先做 A" })).status, 200);
     const answered = await until(async () => { const v = await threadOf(t.id); return v.status === "done" && v; }, "answered");

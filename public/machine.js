@@ -1,4 +1,4 @@
-// The paired machine on the settings page (src/machine.ts, runner/): a one-time pairing code for the runner, whether
+// The paired machine on the settings page (src/machine.ts; the runner is in Aelios-desktop): a one-time pairing code for the runner, whether
 // it is online, and revoking it. app.js mixes this into the page's state.
 function machinePage() {
   return {
