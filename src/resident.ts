@@ -143,6 +143,7 @@ import {
   type TaskStatus,
   type ThreadCard
 } from "./cloud-tasks";
+import { MachineStore, machineRecord, machineReply, type Ask, type WorkKind } from "./machine";
 import { TOKEN_PAGE, dispatchHands, fingerprint, setUpHands, WORKFLOW, type HandsRepo } from "./hands-repo";
 import { fromOpenAI, toOpenAI } from "./openai-chat";
 import { SENT_STICKER, stickerMarks, withoutStickerMarks } from "./sticker-marks";
@@ -381,6 +382,8 @@ export type WebThread = {
   lines: WebThreadLine[];
   files: ThreadFile[];
   canSay: boolean;
+  /** On the machine: what the thread asks them and has not been resolved. */
+  asks?: Ask[];
 };
 
 type LetterOutcome = { status: "written" | "empty" | "failed" | "pending"; error?: string };
@@ -1415,7 +1418,44 @@ export class Resident extends Think<Env> {
 
   /** Where jobs can run besides the resident's own threads. */
   private taskRoutes(): TaskRoutes {
-    return { linux: Boolean(this.githubToken()) };
+    return { linux: Boolean(this.githubToken()), machine: this.cloudTasksOn() && Boolean(this.machines().active()) };
+  }
+
+  // ---- the paired machine (machine.ts) ----
+
+  #machineStore: MachineStore | null = null;
+  private machines(): MachineStore {
+    this.#machineStore ??= new MachineStore(this.sqlShownOnWeb(), this.cloudTasks(), (operation) => this.ctx.storage.transactionSync(operation));
+    return this.#machineStore;
+  }
+
+  webMachine() { return this.machines().status(); }
+  webMachineCode() { return machineReply(() => this.machines().code()); }
+  webMachineRevoke(runnerId?: string) { return machineReply(() => this.machines().revoke(runnerId)); }
+  machineRegister(body: unknown, trusted: boolean) { return machineReply(() => this.machines().register(body, trusted)); }
+
+  /** The runner's own calls. A final receipt leaves a record in the conversation; it does not start a turn. */
+  async machineRequest(token: string, action: "heartbeat" | "poll" | "receipt", body: unknown) {
+    const machines = this.machines();
+    const answer = await machineReply(() => (action === "heartbeat" ? machines.heartbeat(token) : action === "poll" ? machines.poll(token, body) : machines.receipt(token, body)));
+    const finished = (answer.body as { finished?: { task: Task } }).finished;
+    if (finished) {
+      delete (answer.body as { finished?: unknown }).finished;
+      await this.machineNote(finished.task.id);
+    }
+    return answer;
+  }
+
+  /** Kept in the conversation without a reply; while it is replying, a moment later. */
+  async machineNote(id: string): Promise<void> {
+    const task = this.cloudTasks().get(id);
+    if (!task) return;
+    if (this.activeTurn || this.#draftActive?.()) {
+      await this.schedule(10, "machineNote", id);
+      return;
+    }
+    const at = Date.now();
+    await this.appendMessageToHistory({ id: `machine_${id}`, role: "user", parts: [{ type: "text", text: machineRecord(task) }], metadata: { at } } as UIMessage);
   }
 
   /** How it stands, for the settings page and /status. */
@@ -1467,7 +1507,7 @@ export class Resident extends Think<Env> {
           title: z.string().describe("A few words in their language, for the task's card."),
           job: z.string().describe("The whole job, for a thread that knows nothing else."),
           repo: z.string().optional().describe("owner/name of the GitHub repository to work in, if there is one."),
-          execution: z.enum(["local", "linux"]).optional().describe("Where it runs, from the description. Leave it out for the usual place."),
+          execution: z.enum(["local", "linux", "machine"]).optional().describe("Where it runs, from the description. Leave it out for the usual place."),
           follow_up_of: z.string().optional().describe("The id (t_…) of an earlier task or thread this one continues; find finds it."),
           role: z.string().optional().describe("A role from their settings page (coder, reviewer, researcher, or one they added): its instructions go before your job and its threads use its model, so write only what this job needs. A follow-up keeps its thread's role.")
         }),
@@ -1525,6 +1565,7 @@ export class Resident extends Think<Env> {
   /** The place a job asked for in cloud_task goes to: local, or linux when it is set up. */
   private placeFor(asked: TaskExecution | undefined): TaskExecution | undefined | { error: string } {
     if (!asked || asked === "local" || this.taskRoutes()[asked]) return asked;
+    if (asked === "machine") return { error: "Not sent: no machine is paired with this resident (settings page → 后台帮忙). Tell them." };
     return { error: `Not sent: ${asked} is not set up on their settings page; only local is. Send it to local if a thread without a shell can do it, or tell them.` };
   }
 
@@ -1551,7 +1592,11 @@ export class Resident extends Think<Env> {
     const follows = earlier ? this.cloudTasks().continuing(earlier) : null;
     const refused = this.taskRefusal(follows);
     if (refused) return { error: refused };
-    if (earlier && !follows) return { error: `No task or thread ${earlier}. find with in threads finds them.` };
+    if (earlier && !follows) {
+      const named = this.cloudTasks().get(earlier);
+      if (this.cloudTasks().latest(named?.root ?? earlier)?.runs === "retired") return { error: `Thread ${earlier} ran on a line that is no longer in use: it cannot be carried on. Send a new task instead.` };
+      return { error: `No task or thread ${earlier}. find with in threads finds them.` };
+    }
     const roles = this.taskRoles();
     const roleName = input.role?.trim().toLowerCase() || follows?.role || "";
     const role = roleName ? roles.get(roleName) : null;
@@ -1575,12 +1620,28 @@ export class Resident extends Think<Env> {
     if (!this.cloudTasksOn()) return { error: "后台帮忙关着" };
     const routes = this.taskRoutes();
     // A follow-up stays where its thread ran, while that is still set up.
-    const stays = follows && (follows.runs === "local" || (follows.runs === "linux" && routes.linux)) ? follows.runs : null;
+    const stays = follows && (follows.runs === "local" || (follows.runs !== "retired" && routes[follows.runs])) ? follows.runs : null;
     const execution: TaskExecution = input.execution ?? stays ?? "local";
     if (execution === "linux" && !routes.linux) return { error: "还没接 GitHub Actions：设置页里填一个 GitHub token" };
+    // A thread on the machine stays there: its session is there.
+    if (follows?.runs === "machine" && execution !== "machine") return { error: "这条线程在机器上，接着做也只能在机器上；要换地方就新派一单" };
     const store = this.cloudTasks();
     const added = store.add({ ...input, execution });
     if ("error" in added) return added;
+    if (execution === "machine") {
+      // Theirs goes in at once (the running turn stops); the resident's own follow-up waits its turn.
+      const kind: WorkKind = input.direct ? "say" : follows ? "mail" : "job";
+      try {
+        this.machines().enqueue(added.task, kind, input.job);
+      } catch (error) {
+        store.drop(added.task.id);
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+      store.sent(added.task.id, "");
+      await this.schedule(this.quietMinutes() * 60, "taskQuiet", { id: added.task.id });
+      await this.pruneTasks();
+      return store.get(added.task.id) ?? added.task;
+    }
     if (execution === "local") {
       store.sent(added.task.id, "");
       try {
@@ -1882,6 +1943,7 @@ export class Resident extends Think<Env> {
         return;
       }
     }
+    if (pending?.runs === "machine") this.machines().expire();
     const decided = store.quiet(payload.id);
     if (decided === "wait") {
       await this.schedule(60 * 60, "taskQuiet", payload);
@@ -2035,7 +2097,8 @@ export class Resident extends Think<Env> {
       tasks: tasks.map((task) => this.cloudTasks().card(task)),
       lines,
       files,
-      canSay: this.cloudTasksOn() && latest.runs === "local"
+      canSay: this.cloudTasksOn() && (latest.runs === "local" || latest.runs === "machine"),
+      ...(latest.runs === "machine" ? { asks: this.machines().asks(root) } : {})
     };
   }
 
@@ -2051,10 +2114,11 @@ export class Resident extends Think<Env> {
     const tasks = this.cloudTasks().thread(root);
     const latest = tasks.at(-1);
     if (!latest) return { error: "没有这条线程，可能太旧被清掉了" };
-    if (latest.runs !== "local") return { error: "这条线程不在住户这里，去它自己的会话里说" };
+    if (latest.runs !== "local" && latest.runs !== "machine") return { error: "这条线程不在住户这里，去它自己的会话里说" };
     const job = text.trim();
     if (!job) return { error: "写点什么再发" };
-    const started = await this.startTask({ title: tasks[0].title, job, repo: latest.repo, follows: latest.id, execution: "local", direct: true }, latest);
+    // On the machine her words go straight to its session, stopping a running turn (machine.ts).
+    const started = await this.startTask({ title: tasks[0].title, job, repo: latest.repo, follows: latest.id, execution: latest.runs, direct: true }, latest);
     return "error" in started ? started : this.webThread(root);
   }
 
@@ -4112,7 +4176,7 @@ export class Resident extends Think<Env> {
     const store = this.cloudTasks();
     const task = store.get(taskId);
     if (!task || !store.choose(taskId, choice)) return { error: "这张卡已经不等你选了" };
-    if (task.runs === "local") {
+    if (task.runs === "local" || task.runs === "machine") {
       const said = await this.webThreadSay(task.root, choice);
       if (!("error" in said)) return { ok: true };
     }

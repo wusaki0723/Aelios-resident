@@ -34,6 +34,7 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
 <link rel="stylesheet" href="/app.css">
 <script src="/markdown.js"></script>
 <script src="/group.js"></script>
+<script src="/machine.js"></script>
 <script src="/app.js"></script>
 <script defer src="/vendor/alpine-3.14.9.min.js"></script>
 </head>
@@ -1016,6 +1017,14 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
             </template>
             <p class="error" x-show="cloud.on && cloud.github.problem" x-text="cloud.github.problem"></p>
             <div class="choices" x-show="cloud.on && !cloud.github.on"><a class="btn small" :href="cloud.github.tokenPage" target="_blank" rel="noopener noreferrer">去 GitHub 生成 token</a></div>
+            <div class="set machine" x-show="cloud.on" x-init="loadMachine()">
+              <div class="inline"><span style="white-space: nowrap">机器</span><span class="spacer"></span><span class="pill" :class="machine.machine && machine.machine.online ? 'ok' : ''" x-text="machineState()"></span>
+                <button class="icon-btn sm" type="button" x-show="!machine.machine" :disabled="machine.busy" @click="machineCode()" title="生成配对码" aria-label="生成配对码"><i class="i i-link" aria-hidden="true"></i></button>
+                <button class="icon-btn sm danger" type="button" x-show="machine.machine" :disabled="machine.busy" @click="machineRevoke()" title="撤销这台机器" aria-label="撤销这台机器"><i class="i i-trash" aria-hidden="true"></i></button></div>
+              <p class="hint" x-show="machine.code && !machine.machine">在那台机器上运行（10 分钟内有效，用一次作废）：</p>
+              <code class="copy" x-show="machine.code && !machine.machine" x-text="machineCommand()"></code>
+              <p class="error" x-show="machine.error" x-text="machine.error"></p>
+            </div>
             <details x-show="cloud.on">
               <summary>怎么接</summary>
               <ol class="help" style="padding-left: 28px; white-space: normal">

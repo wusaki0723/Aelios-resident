@@ -25,11 +25,13 @@ async function call(request, url, init) {
   return body;
 }
 
-/** Pairing happens once, with the web key; the key is never kept. */
-export async function register({ url, resident, webKey, label, request = fetch }) {
-  const body = await call(request, url + residentPath(resident) + "/web/runner/register", {
-    headers: { "x-web-key": webKey, "content-type": "application/json" }, body: JSON.stringify({ label })
-  });
+/** Pairing happens once, with a one-time code from the settings page or with the web key; neither is kept. */
+export async function register({ url, resident, webKey, code, label, request = fetch }) {
+  const body = code
+    ? await call(request, url + residentPath(resident) + "/runner/v1/pair", { headers: { "content-type": "application/json" }, body: JSON.stringify({ label, code }) })
+    : await call(request, url + residentPath(resident) + "/web/runner/register", {
+      headers: { "x-web-key": webKey, "content-type": "application/json" }, body: JSON.stringify({ label })
+    });
   if (typeof body.runnerId !== "string" || typeof body.token !== "string" || body.protocol !== PROTOCOL) throw new CloudError("the resident does not speak " + PROTOCOL, 502, "PROTOCOL");
   return { runnerId: body.runnerId, token: body.token };
 }
