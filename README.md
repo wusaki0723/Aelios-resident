@@ -449,6 +449,8 @@ Enter a server's address (https) under **Other tools** (「别的工具（MCP）
 
 Off by default. Once turned on under **Background help** (「后台帮忙」), when you ask it to dig through lots of material, write something, make a page or change code, it writes the work up as a job and hands it to a **thread**, and keeps chatting with you. None of the intermediate steps use the chat's context or break its cache. When the thread is done, the resident tells you in its own words.
 
+**Upgrading?** Jobs on a claude.ai routine are no longer supported, and the resident forgets the saved trigger URL and token. The routine's trigger token is still valid on claude.ai: delete the routine there (or regenerate/revoke its token). If you also stored `CLOUD_TASK_TOKEN` as a Cloudflare secret, delete it. Old jobs from that line stay listed as retired.
+
 A thread can run in two places:
 
 - **On the resident itself** (nothing else to set up, no Claude subscription needed): each thread has its own conversation and files. It can search the web, read pages, use long-term memory, the notebook, connected MCP tools, and read and write its own files. It has no shell, so it cannot install or run anything.

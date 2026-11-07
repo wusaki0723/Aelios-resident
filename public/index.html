@@ -41,8 +41,8 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
 <div class="sky" aria-hidden="true"></div>
 <div class="shell" :class="{ 'has-rail': authed && !miniApp && residents.list.length > 0, 'rail-folded': railFolded }" x-data="resident()" x-init="start()" x-cloak>
 
-  <!-- ===== the residents (src/residents.ts): a drawer on a phone; on a wide screen (a computer's browser, or the
-       DSH panel) a sidebar beside the page, with the page's own tools on top and the resident on the page as a card ===== -->
+  <!-- ===== the residents (src/residents.ts): a drawer on a phone; on a wide screen (a computer's browser) a
+       sidebar beside the page, with the page's own tools on top and the resident on the page as a card ===== -->
   <div class="rail-scrim" x-show="residents.open" x-transition.opacity @click="residents.open = false" @keydown.escape.window="residents.open = false"></div>
   <nav class="rail" x-show="authed && !miniApp && residents.list.length" :class="residents.open && 'open'" aria-label="住户们">
     <div class="rail-head">

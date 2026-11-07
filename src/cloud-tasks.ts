@@ -53,6 +53,8 @@ const REPORTED: readonly TaskStatus[] = ["done", "failed", "needs_you"];
 
 /** Where a task runs (see the top of this file). */
 export type TaskExecution = "local" | "linux";
+/** What a stored task ran on: also "retired", a row of the claude.ai or DSH line, which is only listed, never run or reopened. */
+export type TaskRuns = TaskExecution | "retired";
 
 export type Task = {
   id: string;
@@ -62,7 +64,7 @@ export type Task = {
   follows: string;
   /** The first task of its thread: tasks that follow each other share one thread (and, run locally, its files). */
   root: string;
-  runs: TaskExecution;
+  runs: TaskRuns;
   /** Written by them in the thread, not sent by the resident. */
   direct: boolean;
   /** The role it was sent with (task-roles.ts), or "": its template is in the job, and its model does the work. */
@@ -366,9 +368,7 @@ function taskOf(row: Row): Task {
     repo: row.repo,
     follows: row.follows,
     root: row.root || row.id,
-    // shortcut: rows from the retired claude.ai ("external") and DSH ("desktop") lines show as linux, the other
-    // remote line, so they stay listed and cannot be opened as a local thread; drop this with linux.
-    runs: (row.runs === "local" ? "local" : "linux") as TaskExecution,
+    runs: (row.runs === "local" || row.runs === "linux" ? row.runs : "retired") as TaskRuns,
     direct: Boolean(row.direct),
     role: row.role ?? "",
     unasked: row.unasked ?? 0,
@@ -403,7 +403,7 @@ export type FoundThread = {
   id: string;
   title: string;
   status: TaskStatus;
-  runs: TaskExecution;
+  runs: TaskRuns;
   tasks: number;
   updatedAt: number;
   asked: string;
@@ -414,7 +414,7 @@ export type FoundThread = {
 };
 
 /** One thread as the web page lists it: its first task's id, its newest task's title and state. */
-export type ThreadCard = { id: string; title: string; status: TaskStatus; runs: TaskExecution; tasks: number; updatedAt: number; waiting: boolean };
+export type ThreadCard = { id: string; title: string; status: TaskStatus; runs: TaskRuns; tasks: number; updatedAt: number; waiting: boolean };
 
 function hex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -694,12 +694,13 @@ export class TaskStore {
 
   /**
    * The task a follow-up of `id` carries on from: the newest task of the thread `id` belongs to (`id` may be any of
-   * its tasks, or the thread's own id even once its first task is gone). null when there is no such thread.
+   * its tasks, or the thread's own id even once its first task is gone). null when there is no such thread, or it
+   * ran on a retired line (listed only: it is never carried on, nor moved to another place).
    */
   continuing(id: string): Task | null {
     const named = this.get(id);
     const latest = this.latest(named?.root ?? id);
-    return latest && !latest.test ? latest : null;
+    return latest && !latest.test && latest.runs !== "retired" ? latest : null;
   }
 
   /** The files a thread here had when last looked at, and when that was; null when it has not been looked at. */

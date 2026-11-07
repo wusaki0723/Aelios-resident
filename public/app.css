@@ -606,7 +606,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--text-3); }
 .rail-head, .rail-current, .rail-foot, .rail-item .sub { display: none; }
 .ident, .top-tools { display: contents; }
 
-/* ---- a wide screen: a computer's browser, or the DSH panel ----
+/* ---- a wide screen: a computer's browser ----
    The sidebar beside the page: the page's tools on top, the resident on the page as a card, the other residents and
    the groups below with a line each, the settings at the bottom. The conversation goes down the middle under a pill
    with its name, and the composer is one box. Folding the sidebar gives the page the whole width. Only the layout

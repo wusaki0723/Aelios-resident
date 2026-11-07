@@ -139,6 +139,7 @@ import {
   type TaskCard,
   type TaskExecution,
   type TaskRoutes,
+  type TaskRuns,
   type TaskStatus,
   type ThreadCard
 } from "./cloud-tasks";
@@ -374,7 +375,7 @@ export type WebThreadLine = {
 export type WebThread = {
   id: string;
   title: string;
-  runs: TaskExecution;
+  runs: TaskRuns;
   status: TaskStatus;
   tasks: TaskCard[];
   lines: WebThreadLine[];
@@ -693,6 +694,8 @@ export class Resident extends Think<Env> {
   /** Settings saved on the settings page, by variable name. They live in res_settings as "env:<name>". */
   private savedConfig(): Record<string, string> {
     this.sql`CREATE TABLE IF NOT EXISTS res_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, at INTEGER NOT NULL)`;
+    // The retired claude.ai trigger: its settings have no field any more, so they are not kept.
+    this.sql`DELETE FROM res_settings WHERE key IN ('env:CLOUD_TASK_URL', 'env:CLOUD_TASK_TOKEN')`;
     const rows = this.sql<{ key: string; value: string }>`SELECT key, value FROM res_settings WHERE key LIKE 'env:%'`;
     return Object.fromEntries(rows.map((row) => [row.key.slice(4), row.value]));
   }
@@ -1572,7 +1575,7 @@ export class Resident extends Think<Env> {
     if (!this.cloudTasksOn()) return { error: "后台帮忙关着" };
     const routes = this.taskRoutes();
     // A follow-up stays where its thread ran, while that is still set up.
-    const stays = follows && (follows.runs === "local" || routes[follows.runs]) ? follows.runs : null;
+    const stays = follows && (follows.runs === "local" || (follows.runs === "linux" && routes.linux)) ? follows.runs : null;
     const execution: TaskExecution = input.execution ?? stays ?? "local";
     if (execution === "linux" && !routes.linux) return { error: "还没接 GitHub Actions：设置页里填一个 GitHub token" };
     const store = this.cloudTasks();

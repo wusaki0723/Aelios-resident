@@ -305,7 +305,7 @@ await test("threads: follow-ups share a root, their own words do not count or st
   assert.equal(threads[1].tasks, 3);
   assert.equal(tasks.codeOf(first.id).length, 32);
 
-  // A table from before threads: its tasks are threads of their own, and show as the remote line (linux).
+  // A table from before threads: its tasks are threads of their own, and show as retired.
   const old = new DatabaseSync(":memory:");
   old.exec(`CREATE TABLE res_tasks (id TEXT PRIMARY KEY, code TEXT NOT NULL, title TEXT NOT NULL, job TEXT NOT NULL,
     repo TEXT NOT NULL, follows TEXT NOT NULL, status TEXT NOT NULL, session_url TEXT NOT NULL, progress TEXT NOT NULL,
@@ -319,7 +319,7 @@ await test("threads: follow-ups share a root, their own words do not count or st
   const migrated = new t.TaskStore(sql);
   const legacy = migrated.get("t_aaaaaaaaaa");
   assert.equal(legacy.root, "t_aaaaaaaaaa");
-  assert.equal(legacy.runs, "linux", "a row of the retired claude.ai or DSH line shows as linux, not as a thread here");
+  assert.equal(legacy.runs, "retired", "a row from before threads was claude.ai's: retired, not a thread here or on Actions");
   assert.equal(legacy.direct, false);
   assert.equal(legacy.role, "", "tasks from before had no role");
   assert.equal(legacy.unasked, 0, "every task from before was asked for");
@@ -366,6 +366,23 @@ await test("a follow-up carries on from its thread's newest task, named by any t
   // Its first task pruned away: the thread's id still finds it.
   db.prepare("DELETE FROM res_tasks WHERE id = ?").run(first.id);
   assert.equal(tasks.continuing(first.id).id, said.id);
+});
+
+await test("rows of the retired claude.ai and DSH lines are listed only: not rerun, not lent the hands, not carried on", () => {
+  const { tasks } = store();
+  for (const line of ["external", "desktop", ""]) {
+    const { task, code } = tasks.add({ title: line || "old", job: "x", execution: line });
+    tasks.result(task.id, { status: "failed", summary: "没做成", links: [] });
+    assert.equal(tasks.get(task.id).runs, "retired", line);
+    // The hands gate (resident.ts handsTask) lets only runs === "linux" through; the report check still finds it.
+    assert.equal(tasks.reporting(task.id, code).runs, "retired", line);
+    assert.equal(tasks.rerun(task.id), false, `${line}: not reopened by a GitHub re-run`);
+    assert.equal(tasks.continuing(task.id), null, `${line}: not carried on`);
+    assert.equal(tasks.threads().find((thread) => thread.id === task.id).runs, "retired", `${line}: still listed`);
+  }
+  const live = tasks.add({ title: "live", job: "x", execution: "linux" }).task;
+  tasks.result(live.id, { status: "failed", summary: "x", links: [] });
+  assert.equal(tasks.rerun(live.id), true, "a run on Actions still can be");
 });
 
 await test("find_threads: any word in what was asked, reported or linked, or in a file's name; more words first, then the newest; files noted and looked at again once the thread moves", () => {

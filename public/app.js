@@ -1897,7 +1897,7 @@ function resident() {
       return this.threads.threads.filter(function (t) { return group === 'open' ? open(t) : !open(t); });
     },
     runsText(runs) {
-      return { local: '在住户这里干', linux: '在 GitHub Actions 上干' }[runs] || '';
+      return { local: '在住户这里干', linux: '在 GitHub Actions 上干', retired: '旧线路，已停用' }[runs] || '';
     },
     threadSub() {
       var latest = (this.thread.tasks || []).at(-1);
