@@ -317,6 +317,7 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
           model?: string;
           label?: string;
           runnerId?: string;
+          all?: boolean;
         })
       : {};
   switch (`${request.method} ${url.pathname}`) {
@@ -546,6 +547,16 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
           "cache-control": "no-store"
         }
       });
+    }
+    case "GET /web/waiting":
+      return Response.json(await agent.webWaiting(), { headers: { "cache-control": "no-store" } });
+    case "POST /web/waiting/seen":
+      return Response.json(await agent.webWaitingRead(body.all === true ? null : String(body.id ?? "")));
+    case "POST /web/thread/stop": {
+      const id = String(body.id ?? "");
+      if (!THREAD_ID.test(id)) return Response.json({ error: "没有这条线程" }, { status: 404 });
+      const stopped = await agent.webThreadStop(id);
+      return Response.json(stopped, { status: "error" in stopped ? 400 : 200 });
     }
     case "POST /web/thread/say": {
       const id = String(body.id ?? "");

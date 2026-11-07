@@ -143,6 +143,7 @@ import {
   type TaskStatus,
   type ThreadCard
 } from "./cloud-tasks";
+import { WaitingStore } from "./waiting-store";
 import { MachineStore, machineRecord, machineReply, type Ask, type WorkKind } from "./machine";
 import { TOKEN_PAGE, dispatchHands, fingerprint, setUpHands, WORKFLOW, type HandsRepo } from "./hands-repo";
 import { fromOpenAI, toOpenAI } from "./openai-chat";
@@ -1442,8 +1443,33 @@ export class Resident extends Think<Env> {
     if (finished) {
       delete (answer.body as { finished?: unknown }).finished;
       await this.machineNote(finished.task.id);
+      await this.pushWaitingAsks();
     }
     return answer;
+  }
+
+  // ---- the waiting list (waiting.ts) ----
+  #waitingStore: WaitingStore | null = null;
+  private waiting(): WaitingStore {
+    this.#waitingStore ??= new WaitingStore(this.sqlShownOnWeb(), this.cloudTasks(), this.machines());
+    return this.#waitingStore;
+  }
+  webWaiting() { return this.waiting().list(); }
+  webWaitingRead(id: string | null) { this.waiting().read(id); return this.waiting().list(); }
+
+  /** Each new ask is pushed once, if push is on. Nothing is written into the conversation. */
+  private async pushWaitingAsks(): Promise<void> {
+    if (this.pushMode() === "off") return;
+    const title = this.webIdentity().name;
+    for (const message of this.waiting().unpushed()) await this.push({ title, ...message }).catch(() => undefined);
+  }
+
+  /** The stop button: a thread running on the machine is told to stop. The stopped turn reports itself. */
+  webThreadStop(root: string): { ok: true } | { error: string } {
+    const latest = this.cloudTasks().latest(root);
+    if (!latest || latest.runs !== "machine" || latest.status !== "working") return { error: "这条线程现在没在机器上跑" };
+    try { this.machines().enqueue(latest, "cancel", ""); } catch (error) { return { error: error instanceof Error ? error.message : "没能叫停" }; }
+    return { ok: true };
   }
 
   /** Kept in the conversation without a reply; while it is replying, a moment later. */
@@ -1918,6 +1944,7 @@ export class Resident extends Think<Env> {
     const result = parseResult(body);
     if ("error" in result) return { status: 400, body: result };
     if (store.result(id, result)) await this.tellAboutTask(store.get(id)!, (task) => resultNote(task));
+    await this.pushWaitingAsks();
     return { status: 200, body: { ok: true } };
   }
 

@@ -178,3 +178,36 @@ await test("the record left for the resident is a note, fenced, and short", () =
   assert.ok(note.length < 900);
   assert.equal(note.match(/>>>/g).length, 1, "the thread's words cannot close the fence");
 });
+
+await test("stopped: a cancelled receipt stops the task, the cancel work's own receipt changes no task, a notice is kept", async () => {
+  const f = await paired();
+  const job = f.add("job");
+  const { work } = await f.store.poll(f.token, { claimKey: "ck_aaaaaaaa" });
+  f.store.enqueue(job, "cancel", "");
+  const { work: stop } = await f.store.poll(f.token, { claimKey: "ck_bbbbbbbb", accept: ["cancel"] });
+  assert.equal(stop.kind, "cancel");
+  // The order to stop is done; the turn it stops is not.
+  const cancelDone = await f.store.receipt(f.token, final(stop));
+  assert.equal(cancelDone.finished, undefined);
+  assert.equal(f.tasks.get(job.id).status, "working");
+  const stopped = await f.store.receipt(f.token, final(work, { status: "cancelled", summary: "Stopped.", notice: { text: "found two config files", fyi: true } }));
+  assert.equal(stopped.finished.status, "stopped");
+  assert.equal(f.tasks.get(job.id).status, "stopped");
+  assert.deepEqual(f.store.notes().map((n) => n.text), ["found two config files"]);
+});
+
+await test("old finished work takes its receipts and notes with it", async () => {
+  const f = await paired();
+  const first = f.add("job");
+  const { work } = await f.store.poll(f.token, { claimKey: "ck_cccccccc" });
+  await f.store.receipt(f.token, final(work, { notice: { text: "n", fyi: true } }));
+  const now = Date.now;
+  try {
+    Date.now = () => now() + 8 * 86_400_000;
+    await f.store.heartbeat(f.token);
+    f.add("job");
+  } finally { Date.now = now; }
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM res_machine_receipts WHERE work_id = ?").get(work.workId).n, 0);
+  assert.deepEqual(f.store.notes(), []);
+  assert.ok(first);
+});
