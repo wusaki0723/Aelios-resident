@@ -1,6 +1,6 @@
 # runner ↔ 云端协议 `aelios-runner/1`
 
-这是 runner 和住户（Worker）之间的协议。云端那一半还没写，runner 现在只对着 `test/fake-cloud.mjs` 测。
+这是 runner 和住户（Worker）之间的协议。云端那一半在 `src/machine.ts`；runner 自己的测试对着 `test/fake-cloud.mjs`。云端：一个住户只配一台机器；`cancelled` 在线程页上显示成「没做成」；机器离线时住户派活当场被拒，不排队。
 它不复用旧的 `/desktop/v1`。想法借自 agent-autoloop 的接单协议：只往外连、领活幂等、每份活一个 token、回执可重放、回执里带 ask / notice / resolve。
 
 ## 原则
@@ -19,7 +19,9 @@
 
 | 地址 | 谁调用 | 凭据 |
 |---|---|---|
-| `POST {P}/web/runner/register` `{label}` → `{runnerId, token, protocol}` | 配对时调一次 | 请求头 `x-web-key` |
+| `POST {P}/web/runner/code` → `{code, expiresAt}` | 设置页生成一次性配对码（10 分钟） | 请求头 `x-web-key` |
+| `POST {P}/runner/v1/pair` `{label, code}` → `{runnerId, token, protocol}` | 配对时调一次，用配对码 | 无（配对码本身） |
+| `POST {P}/web/runner/register` `{label}` → `{runnerId, token, protocol}` | 同上，用网页钥匙代替配对码 | 请求头 `x-web-key` |
 | `POST {P}/web/runner/revoke` `{runnerId}` → `{ok}` | 解除配对 | 请求头 `x-web-key` |
 | `POST {P}/runner/v1/heartbeat` | runner，每个周期一次 | `Authorization: Bearer <token>` |
 | `POST {P}/runner/v1/poll` | runner | 同上 |

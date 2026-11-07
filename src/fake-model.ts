@@ -169,6 +169,13 @@ function decide(options: LanguageModelV4CallOptions): { text: string; delayMs?: 
   // A job with a role from the settings page (task-roles.ts): only what this job needs, the role says the rest.
   if (said.includes("角色线程接着做")) return { tool: "cloud_task", input: { title: "接着干", job: "再看一遍。", execution: "local", follow_up_of: said.match(/t_[0-9a-f]{10}/)?.[0] } };
   if (said.includes("按角色派活")) return { tool: "cloud_task", input: { title: "按角色干", job: "看一下 README。", execution: "local", role: said.split("按角色派活")[1].trim() } };
+  // The paired machine (machine.ts): what follows the words is the job, sent as it is.
+  if (said.includes("机器派活")) return { tool: "cloud_task", input: { title: "机器上干", job: said.split("机器派活")[1].trim(), execution: "machine" } };
+  if (said.includes("机器记录几条")) return { text: `机器记录 ${prompt.filter((m) => textOf(m.content).includes("ran on their machine")).length} 条` };
+  if (said.includes("机器接着派")) {
+    const [, earlier, job] = said.match(/机器接着派 (t_[0-9a-f]{10}) ([\s\S]+)$/) ?? [];
+    return { tool: "cloud_task", input: { title: "机器上接着干", job: job ?? "", follow_up_of: earlier } };
+  }
   if (said.includes("派活")) return { tool: "cloud_task", input: { ...cloudJob("修 README 的错字"), repo: "wusaki0723/aelios-resident", ...where } };
   if (said.includes("接着派")) {
     const earlier = [...prompt.map((m) => textOf(m.content)).join("\n").matchAll(/\bt_[0-9a-f]{10}\b/g)].at(-1)?.[0];

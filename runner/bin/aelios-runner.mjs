@@ -27,7 +27,7 @@ async function webKey() {
 async function pair() {
   const { values } = parseArgs({ args: rest, options: {
     url: { type: "string" }, resident: { type: "string", default: "default" }, workspace: { type: "string" },
-    access: { type: "string", default: "read" }, plugin: { type: "string", default: "kiro" }, label: { type: "string", default: "Runner" }, command: { type: "string" }
+    access: { type: "string", default: "read" }, plugin: { type: "string", default: "kiro" }, label: { type: "string", default: "Runner" }, command: { type: "string" }, code: { type: "string" }
   } });
   if (!values.url?.startsWith("https://") && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(values.url ?? "")) throw new Error("--url must be the resident's https address");
   if (!values.workspace || !path.isAbsolute(values.workspace)) throw new Error("--workspace must be an absolute folder path");
@@ -43,7 +43,7 @@ async function pair() {
     if ((await state.read()).device) throw new Error('already paired; run "aelios-runner unpair" first');
     mkdirSync(values.workspace, { recursive: true });
     config.workspace = realpathSync(values.workspace);
-    const device = await register({ url: config.url, resident: config.resident, webKey: await webKey(), label: values.label });
+    const device = await register({ url: config.url, resident: config.resident, ...(values.code ? { code: values.code } : { webKey: await webKey() }), label: values.label });
     await state.update(s => { s.device = device; });
     await writeConfig(configFile, config);
     console.log(`Paired. Plugin ${config.plugin}, access ${config.access}, folder ${config.workspace}.\nStart with: aelios-runner start`);

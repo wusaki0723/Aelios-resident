@@ -6,7 +6,7 @@
 云端住户 ──(runner 往外连)── runner ──(ACP，stdio)── 帮手：Kiro / DSH / 任何说 ACP 的命令
 ```
 
-runner 不开端口，只往云端发请求。协议见 [PROTOCOL.md](PROTOCOL.md)。**云端那一半还没做**，现在只能对着测试里的假云端跑。
+runner 不开端口，只往云端发请求。协议见 [PROTOCOL.md](PROTOCOL.md)。云端那一半在 `src/machine.ts`。
 
 ## 装
 
@@ -19,10 +19,10 @@ npm link          # 得到 aelios-runner 命令；不想 link 就用 node bin/ae
 
 ## 配对
 
-住户的网页钥匙（`WEB_KEY`）只在配对这一刻用，不会写到硬盘。用环境变量给，或者按提示输入。
+在住户的设置页（后台帮忙 → 机器）点「生成配对码」，把码用 `--code pc_…` 给 runner（10 分钟内有效，用一次就作废）。也可以不用配对码，改给住户的网页钥匙（`WEB_KEY`）：它只在配对这一刻用，不会写到硬盘，用环境变量给，或者按提示输入。
 
 ```sh
-AELIOS_WEB_KEY=… aelios-runner pair \
+aelios-runner pair --code pc_… \
   --url https://你的住户.workers.dev \
   --workspace /home/me/work \
   --access edit \
@@ -32,6 +32,7 @@ AELIOS_WEB_KEY=… aelios-runner pair \
 | 选项 | 意思 |
 |---|---|
 | `--url` | 住户地址，要 https（本机测试可用 http://127.0.0.1） |
+| `--code` | 设置页给的配对码；不给就要网页钥匙 |
 | `--resident` | 住户代号，默认 `default` |
 | `--workspace` | 帮手开工的固定目录，绝对路径。每个线程第一次用时记下，之后不变 |
 | `--access` | 这台机器最高允许的权限档位：`read`（只读）、`edit`（可改工作目录里的文件）、`full`（全部）。默认 `read` |
@@ -80,7 +81,6 @@ AELIOS_REAL_KIRO=1 node --test test/kiro-real.test.mjs   # 真的 kiro-cli，只
 
 ## 已知没做的
 
-- 云端那一半（`/runner/v1` 和 `/web/runner/*`）。
 - 真实 DSH 还没有接过；DSH 的接法是按它的 ACP 文档和 `dsh --profile acp --help` 写的，用假帮手测过。
 - 真实 Kiro 只验证到 initialize。它会不会发 `session/request_permission`、`--trust-all-tools` 的效果，都没测。
 - 云端暂时没有"停下"以外的本机入口；`Runner.cancel(thread)` 已经留好。

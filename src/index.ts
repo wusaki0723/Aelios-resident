@@ -15,6 +15,8 @@
 //   GET  /stickers/<key>                a sticker's picture for the web page (stickers.ts); the key is long and random
 //   GET  /avatar/<key>                  the resident's avatar, put up on the web page (public, like a sticker)
 //   GET  /manifest.webmanifest          the web page as an app for the home screen, with the resident's name and avatar
+//   POST /runner/v1/pair|heartbeat|poll|receipt   the paired machine's runner (machine.ts, runner/PROTOCOL.md):
+//                                       pairing with a code from the settings page, then its own token as Bearer
 //   POST /tasks/<id>/progress|result    a GitHub Actions run or a cloud Claude Code session reporting on its task
 //                                       (cloud-tasks.ts), with the task's one-time code in x-task-code
 //   POST /tasks/<id>/hands              a GitHub Actions run asking for the GitHub token (code in x-task-code)
@@ -27,6 +29,7 @@
 // deletes them.
 
 import { getAgentByName } from "agents";
+import { machineReply, readMachineJson } from "./machine";
 import { callerAllowed, issueSession, miniAppCaller, triesMiniApp } from "./mini-app";
 import { MCP_CALLBACK_PATH } from "./mcp-servers";
 import { MAX_ZIP_BYTES } from "./stickers";
@@ -312,6 +315,8 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
           execution?: string;
           template?: string;
           model?: string;
+          label?: string;
+          runnerId?: string;
         })
       : {};
   switch (`${request.method} ${url.pathname}`) {
@@ -506,6 +511,18 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
       const set = await agent.webGitHubSetup(at.base);
       return Response.json(set, { status: "error" in set ? 400 : 200 });
     }
+    case "GET /web/runner":
+      return Response.json(await agent.webMachine());
+    case "POST /web/runner/code":
+    case "POST /web/runner/register":
+    case "POST /web/runner/revoke": {
+      const done: { status: number; body: unknown } = url.pathname.endsWith("/code")
+        ? await agent.webMachineCode()
+        : url.pathname.endsWith("/register")
+          ? await agent.machineRegister(body, true)
+          : await agent.webMachineRevoke(typeof body.runnerId === "string" ? body.runnerId : undefined);
+      return Response.json(done.body, { status: done.status, headers: { "cache-control": "no-store" } });
+    }
     case "GET /web/threads":
       return Response.json(await agent.webThreads());
     case "GET /web/thread": {
@@ -540,6 +557,18 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
     default:
       return new Response("not found", { status: 404 });
   }
+}
+
+/** The paired machine's runner: JSON bodies of at most 16 KB, its own token as Bearer (pairing: a code instead). */
+async function handleRunner(request: Request, env: Env, at: At, action: "pair" | "heartbeat" | "poll" | "receipt"): Promise<Response> {
+  if (request.method !== "POST") return Response.json({ error: "method not allowed" }, { status: 405 });
+  const parsed = await machineReply(() => readMachineJson(request));
+  const answer = (result: { status: number; body: unknown }) => Response.json(result.body, { status: result.status, headers: { "cache-control": "no-store" } });
+  if (parsed.status !== 200) return answer(parsed);
+  const agent = await residentOf(env, at);
+  if (action === "pair") return answer(await agent.machineRegister(parsed.body, false));
+  const bearer = (request.headers.get("authorization") ?? "").match(/^Bearer (\S+)$/)?.[1] ?? "";
+  return answer(await agent.machineRequest(bearer, action, parsed.body));
 }
 
 export default {
@@ -577,6 +606,8 @@ export default {
           headers: { "content-type": file.type, "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff" }
         });
       }
+      const runner = url.pathname.match(/^\/runner\/v1\/(pair|heartbeat|poll|receipt)$/);
+      if (runner) return await handleRunner(request, env, at, runner[1] as "pair" | "heartbeat" | "poll" | "receipt");
       // A GitHub Actions run of the hands: the GitHub token to work with, and the model through the resident.
       const hands = url.pathname.match(/^\/tasks\/(t_[0-9a-f]{10})\/(hands|model\/chat\/completions)$/);
       if (hands && request.method === "POST") {

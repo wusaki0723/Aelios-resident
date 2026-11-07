@@ -3,6 +3,8 @@
 //
 // - local: a thread of the resident's own (task-worker.ts), a Think child with its own conversation and files,
 //   on the threads' model (Workers AI by default). No subscription or repository needed.
+// - machine: the machine they paired (machine.ts, runner/), which runs a thread as a session of an ACP helper and
+//   answers in it; their own words reach that session directly.
 // - linux: a GitHub Actions run in a private repository the resident sets up with their GitHub token
 //   (hands-repo.ts, public/hands.mjs), for jobs that need a shell: installing things, running tests, opening pull
 //   requests.
@@ -52,7 +54,7 @@ export type TaskStatus = "sent" | "working" | "done" | "failed" | "needs_you" | 
 const REPORTED: readonly TaskStatus[] = ["done", "failed", "needs_you"];
 
 /** Where a task runs (see the top of this file). */
-export type TaskExecution = "local" | "linux";
+export type TaskExecution = "local" | "linux" | "machine";
 /** What a stored task ran on: also "retired", a row of the claude.ai or DSH line, which is only listed, never run or reopened. */
 export type TaskRuns = TaskExecution | "retired";
 
@@ -305,8 +307,8 @@ export function taskOfNote(text: string): string | null {
   return text.startsWith(TASK_NOTE_PREFIX) ? (text.slice(TASK_NOTE_PREFIX.length).match(/^ (t_[0-9a-f]{10})\b/)?.[1] ?? null) : null;
 }
 
-/** Where jobs can run with these settings: local always; linux with a GitHub token. */
-export type TaskRoutes = { linux: boolean };
+/** Where jobs can run with these settings: local always; linux with a GitHub token; machine with a paired one. */
+export type TaskRoutes = { linux: boolean; machine: boolean };
 
 /**
  * cloud_task's description. It is the same whatever is set up, so turning a place on or off on the settings page
@@ -326,8 +328,10 @@ export const TASK_DESCRIPTION =
   "web page; no shell, so it cannot install, run or test anything. Always there.\n" +
   "- linux: a GitHub Actions run on their GitHub account, with a shell: installing, building, running tests, opening " +
   "pull requests; name the repository to change in repo.\n" +
+  "- machine: the computer or server they paired with this resident, with a shell and their own files there. Its " +
+  "thread answers them itself, so its result comes back to you only as a record; a follow-up waits its turn there.\n" +
   "Leave execution out and it goes to a thread here. Pick local for reading and writing that needs no repository; " +
-  "pick linux when the job needs a shell and GitHub Actions is set up. " +
+  "pick linux when the job needs a shell and GitHub Actions is set up; pick machine when they ask for work on their own machine. " +
   "The answer says where it went, or which places are set up.";
 
 // ---- the tasks, in the resident's own SQLite ----
@@ -368,7 +372,7 @@ function taskOf(row: Row): Task {
     repo: row.repo,
     follows: row.follows,
     root: row.root || row.id,
-    runs: (row.runs === "local" || row.runs === "linux" ? row.runs : "retired") as TaskRuns,
+    runs: (row.runs === "local" || row.runs === "linux" || row.runs === "machine" ? row.runs : "retired") as TaskRuns,
     direct: Boolean(row.direct),
     role: row.role ?? "",
     unasked: row.unasked ?? 0,
