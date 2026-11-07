@@ -3,9 +3,10 @@ export const PROTOCOL = "aelios-runner/1";
 
 export class CloudError extends Error {
   constructor(message, status, code) { super(message); this.name = "CloudError"; this.status = status; this.code = code; }
-  /** Worth sending again later: no answer, rate limit or a server fault. Anything else will never be accepted. */
-  get retry() { return this.status === 0 || this.status === 429 || this.status >= 500; }
-  get revoked() { return this.status === 401 || this.status === 403; }
+  /** Worth sending again later: no answer, rate limit, a server fault, or a 403 from something in front of the resident. */
+  get retry() { return this.status === 0 || this.status === 403 || this.status === 429 || this.status >= 500; }
+  /** Only the resident's own 401 withdraws the pairing. */
+  get revoked() { return this.status === 401; }
 }
 
 export const residentPath = id => {

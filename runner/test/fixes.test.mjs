@@ -41,7 +41,7 @@ for (const plugin of ["kiro", "dsh"]) {
   });
 
   t("a resident that answers 413 gets a shorter receipt, and the result is not dropped", async r => {
-    r.cloud.maxBytes = 3000;
+    r.cloud.receiptMax = 3000;
     r.start();
     const work = r.cloud.push({ text: "LONG:6000" });
     const done = await final(r, work);
@@ -70,6 +70,30 @@ for (const plugin of ["kiro", "dsh"]) {
     await r.loop;
     assert.equal(r.prompts().length, 0);
     assert.equal((await r.state.read()).queue.length, 0);
+  });
+
+  t("a resident that always answers 413: a few shorter tries, then the receipt is given up, not sent over and over", async r => {
+    r.cloud.receiptMax = 1;
+    r.start();
+    const work = r.cloud.push({ text: "hello" });
+    await r.cloud.until(async () => r.cloud.receiptHits > 0 && (await r.state.read()).outbox.length === 0, "receipts given up");
+    await sleep(500);
+    assert.ok(r.cloud.receiptHits <= 40, `receipt requests: ${r.cloud.receiptHits}`);
+    assert.equal(r.cloud.finals(work.workId).length, 0);
+  });
+
+  t("a 403 from something in front of the resident is not a revoke: the receipt waits and arrives later", async r => {
+    r.start();
+    const work = r.cloud.push({ text: "SLEEP:200 later" });
+    await r.cloud.until(() => r.cloud.got(work.workId, "started")[0], "started");
+    r.cloud.forbidden = true;
+    await sleep(600);
+    const state = await r.state.read();
+    assert.equal(state.device.revoked, undefined, "not treated as revoked");
+    assert.equal(r.cloud.finals(work.workId).length, 0);
+    r.cloud.forbidden = false;
+    assert.equal((await final(r, work)).status, "done");
+    await r.cloud.until(async () => (await r.state.read()).outbox.length === 0, "outbox empty");
   });
 
   t("an open ask from a restart or a runner error is closed by the next finished turn", async r => {

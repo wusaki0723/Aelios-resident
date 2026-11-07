@@ -9,7 +9,7 @@ export class FakeCloud {
   constructor() {
     this.works = []; this.claims = new Map(); this.receipts = new Map(); this.accepted = []; this.polls = []; this.beats = 0;
     this.deviceToken = "rr_" + crypto.randomBytes(16).toString("hex");
-    this.down = false; this.revoked = false; this.maxBytes = 16 * 1024; this.drops = {}; // drops.poll = 1: handle the next poll, then cut the line before answering
+    this.down = false; this.revoked = false; this.forbidden = false; this.receiptMax = 16 * 1024; this.receiptHits = 0; this.drops = {}; // drops.poll = 1: handle the next poll, then cut the line before answering
     this.seq = 0;
   }
   async listen() {
@@ -46,7 +46,7 @@ export class FakeCloud {
     }
     if (this.down) return send(503, { error: "down" });
     if (this.revoked) return send(401, { error: "revoked", code: "UNAUTHORIZED" });
-    if (Buffer.byteLength(raw) > this.maxBytes) return send(413, { error: "too large", code: "BODY_TOO_LARGE" });
+    if (this.forbidden) return send(403, { error: "blocked by a firewall in front" });
     if (req.headers.authorization !== "Bearer " + this.deviceToken) return send(401, { error: "bad token", code: "UNAUTHORIZED" });
     const reply = (status, value) => {
       if (this.drops[action] > 0) { this.drops[action]--; return req.socket.destroy(); } // the cloud did it; the runner never hears
@@ -63,6 +63,8 @@ export class FakeCloud {
       return reply(200, { work: entry.work });
     }
     if (action === "receipt") {
+      this.receiptHits++;
+      if (Buffer.byteLength(raw) > this.receiptMax) return reply(413, { error: "too large", code: "BODY_TOO_LARGE" });
       const entry = this.works.find(w => w.work.workId === body.workId);
       if (!entry || entry.work.token !== body.token) return reply(409, { error: "token", code: "INVALID_TOKEN" });
       if (JSON.stringify(body).includes(this.deviceToken)) return reply(400, { error: "credential in receipt", code: "INVALID_RECEIPT" });

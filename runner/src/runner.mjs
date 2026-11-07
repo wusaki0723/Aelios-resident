@@ -37,7 +37,7 @@ export class Runner {
     this.config = config; this.state = state; this.log = log; this.request = request;
     this.cloud = cloud ?? null;
     this.live = null; this.running = null; this.flushing = null; this.shuttingDown = false; this.revoked = false;
-    this.error = ""; this.lastBeat = 0;
+    this.error = ""; this.lastBeat = 0; this.failures = 0;
     this.pollMs = config.pollMs ?? 5000; this.heartbeatMs = config.heartbeatMs ?? 30_000;
   }
 
@@ -230,8 +230,9 @@ export class Runner {
       const { work } = await cloud.poll({ claimKey, accept: busy ? ["say", "mail", "cancel"] : KINDS });
       if (work) await this.receive(work);
       this.kick();
-      this.error = "";
+      this.error = ""; this.failures = 0;
     } catch (error) {
+      this.failures++;
       if (error.revoked) { await this.#revoke(); return; }
       this.error = error.retry ? "云端暂时连不上。" : `云端拒绝了请求（${error.code || error.status || error.message}）。`;
       this.log("tick", this.error);
@@ -246,7 +247,7 @@ export class Runner {
       await this.tick();
       await new Promise(resolve => {
         const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
-        const timer = setTimeout(done, this.pollMs);
+        const timer = setTimeout(done, Math.min(this.pollMs * 2 ** Math.min(this.failures, 10), 60_000)); // backs off while the resident is unreachable
         signal.addEventListener("abort", done, { once: true });
       });
     }

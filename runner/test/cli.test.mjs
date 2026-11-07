@@ -23,6 +23,6 @@ test("pair writes config and state (0600) without the web key; status reads them
     for (const file of readdirSync(path.join(home, "h"))) assert.ok(!readFileSync(path.join(home, "h", file), "utf8").includes("web-key"));
     const status = JSON.parse(await run("status"));
     assert.deepEqual([status.paired, status.plugin, status.access], [true, "command", "edit"]);
-    await assert.rejects(run("pair", "--url", cloud.url, "--workspace", path.join(home, "w")), /already paired/);
+    await assert.rejects(run("pair", "--url", cloud.url, "--workspace", path.join(home, "w"), "--plugin", "command", "--command", JSON.stringify([process.execPath])), /already paired/);
   } finally { await cloud.close(); rmSync(home, { recursive: true, force: true }); }
 });

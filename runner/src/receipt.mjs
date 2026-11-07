@@ -27,5 +27,6 @@ export function fit(receipt, max = RECEIPT_MAX_BYTES) {
 export function shrink(receipt) {
   const size = bytes(receipt);
   if (size < 700) return null;
-  return fit(receipt, Math.floor(size / 2));
+  const smaller = fit(receipt, Math.floor(size / 2));
+  return bytes(smaller) < size ? smaller : null;
 }
