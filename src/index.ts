@@ -15,7 +15,7 @@
 //   GET  /stickers/<key>                a sticker's picture for the web page (stickers.ts); the key is long and random
 //   GET  /avatar/<key>                  the resident's avatar, put up on the web page (public, like a sticker)
 //   GET  /manifest.webmanifest          the web page as an app for the home screen, with the resident's name and avatar
-//   POST /runner/v1/pair|heartbeat|poll|receipt   the paired machine's runner (machine.ts, runner/PROTOCOL.md):
+//   POST /runner/v1/pair|heartbeat|poll|receipt   the paired machine's runner (machine.ts, Aelios-desktop packages/runner/PROTOCOL.md):
 //                                       pairing with a code from the settings page, then its own token as Bearer
 //   POST /tasks/<id>/progress|result    a GitHub Actions run or a cloud Claude Code session reporting on its task
 //                                       (cloud-tasks.ts), with the task's one-time code in x-task-code
