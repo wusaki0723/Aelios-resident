@@ -3,7 +3,6 @@
 // Only the web door's own key, WEB_KEY, has to be in Cloudflare. A bot token saved here is connected from here, and
 // the Telegram webhook secret it needs is made by the resident and kept with these settings, never shown.
 
-import { fireUrlProblem } from "./cloud-tasks";
 import { MAX_HEARTBEATS } from "./prompts";
 import { LETTER_KEEP_TOKENS } from "./fold";
 import { quietHoursProblem } from "./quiet-hours";
@@ -113,8 +112,6 @@ export const FIELDS: readonly Field[] = [
   { key: "VOICE_REPLY", kind: "choice", choices: VOICE_REPLIES },
   { key: "VOICE_BASE_URL", kind: "text", check: address },
   { key: "CLOUD_TASKS", kind: "choice", choices: ["on", "off"] },
-  { key: "CLOUD_TASK_URL", kind: "text", check: fireUrlProblem },
-  { key: "CLOUD_TASK_TOKEN", kind: "secret" },
   // A GitHub token with repo and workflow: the resident sets up a private repository and runs jobs there on Actions.
   { key: "CLOUD_TASK_GITHUB_TOKEN", kind: "secret" },
   // Which model the threads work with, here and on GitHub Actions. Empty: Workers AI's glm-4.7-flash.

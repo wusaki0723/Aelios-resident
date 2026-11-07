@@ -73,20 +73,13 @@ if (process.argv[2] !== 'restart') {
   assert.equal(await page.text(), '<h1>知来</h1>');
   console.log('PASS a run on GitHub Actions hands its files back: kept with the thread, shown on its report, opened from the web page');
 
-  // cloud_task is the same whatever is set up; a job that needs a shell goes to the place with one that is.
-  const fires = async () => (await (await fetch(mock + '/__log')).json()).filter(e => e.kind === 'routine.fire').length;
-  await set({ CLOUD_TASK_GITHUB_TOKEN: '', CLOUD_TASK_URL: 'https://api.anthropic.com/v1/claude_code/routines/trig_testtask01/fire', CLOUD_TASK_TOKEN: 'good-token' });
-  const firedBefore = await fires();
-  const instead = await say('Linux派活');
-  assert.equal(instead.runs, 'external', 'GitHub Actions is not set up, claude.ai is');
-  assert.equal(await fires(), firedBefore + 1);
-  await set({ CLOUD_TASK_URL: '', CLOUD_TASK_TOKEN: '' });
+  // cloud_task is the same whatever is set up; a job that needs a shell is not sent when no place has one.
+  await set({ CLOUD_TASK_GITHUB_TOKEN: '' });
   const count = (await api('/web/tasks')).tasks.length;
   await api('/web/say', { text: 'Linux派活' });
   assert.equal((await api('/web/tasks')).tasks.length, count, 'nothing with a shell is set up: nothing is sent');
-  assert.equal(await fires(), firedBefore + 1);
   await set({ CLOUD_TASK_GITHUB_TOKEN: 'good-token' });
-  console.log('PASS a job asked for one place with a shell goes to the other when only that one is set up, and to none when neither is');
+  console.log('PASS a job asked for a place with a shell is not sent when GitHub Actions is not set up');
 } else {
   const tasks = (await api('/web/tasks')).tasks;
   const first = tasks.find(t => t.title === '工作区写入测试' && t.status === 'done');

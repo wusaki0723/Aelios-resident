@@ -315,19 +315,6 @@ const server = http.createServer(async (req, res) => {
     return res.end(MP3);
   }
 
-  // A scheduled task's API trigger (CLOUD_TASK_API_BASE=http://127.0.0.1:9999): wants the token "good-token" and
-  // both headers, and answers with a session link. trig_busyone has fired too often this hour.
-  const routine = url.pathname.match(/^\/v1\/claude_code\/routines\/(trig_\w+)\/fire$/);
-  if (routine) {
-    const headers = Object.fromEntries(["authorization", "anthropic-beta", "anthropic-version"].map((h) => [h, req.headers[h] ?? null]));
-    log.push({ kind: "routine.fire", trigger: routine[1], headers, body: json });
-    if (req.headers.authorization !== "Bearer good-token") return reply({ type: "error", error: { type: "authentication_error", message: "invalid token" } }, 401);
-    if (!req.headers["anthropic-beta"] || !req.headers["anthropic-version"]) return reply({ type: "error", error: { message: "missing header" } }, 400);
-    if (routine[1] === "trig_busyone") return reply({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }, 429);
-    const n = log.filter((e) => e.kind === "routine.fire").length;
-    return reply({ type: "routine_fire", claude_code_session_id: `session_test_${n}`, claude_code_session_url: `https://claude.ai/code/session_test_${n}` });
-  }
-
   // GitHub for the hands (src/hands-repo.ts): the token "good-token" is octo's; "no-workflow-token" cannot write
   // workflow files. The repository it makes is kept here, and a run starts only once its workflow is in.
   const ghAuth = req.headers.authorization;

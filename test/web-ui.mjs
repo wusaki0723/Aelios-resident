@@ -247,25 +247,19 @@ const taskField = (key) => taskGroup.fields.find((field) => field.key === key);
 const taskFields = (on) => [
   { key: 'CLOUD_TASKS', kind: 'choice', value: on, fromWorker: '', choices: ['on', 'off'] },
   { key: 'CLOUD_TASK_GITHUB_TOKEN', kind: 'secret', value: '', fromWorker: '', saved: false, workerHas: false },
-  { key: 'CLOUD_TASK_URL', kind: 'text', value: '', fromWorker: '' },
-  { key: 'CLOUD_TASK_TOKEN', kind: 'secret', value: '', fromWorker: '', saved: false, workerHas: true },
   { key: 'CLOUD_TASK_MODEL', kind: 'text', value: '', fromWorker: '' }
 ];
-assert.deepEqual(Array.from(taskGroup.fields, (field) => field.key), ['CLOUD_TASKS', 'CLOUD_TASK_GITHUB_TOKEN', 'CLOUD_TASK_URL', 'CLOUD_TASK_TOKEN', 'CLOUD_TASK_MODEL']);
+assert.deepEqual(Array.from(taskGroup.fields, (field) => field.key), ['CLOUD_TASKS', 'CLOUD_TASK_GITHUB_TOKEN', 'CLOUD_TASK_MODEL']);
 const github = { on: false, repo: '', url: '', problem: '', tokenPage: 'https://github.com/settings/tokens/new?scopes=repo,workflow&description=Aelios-resident' };
 page.config = { fields: taskFields('') };
-page.cloud = { on: false, configured: false, origin: 'https://r.example', prompt: 'p', github, today: 0, limit: 10, tasks: [] };
+page.cloud = { on: false, configured: false, origin: 'https://r.example', github, today: 0, limit: 10, tasks: [] };
 assert.equal(page.inEffect(taskField('CLOUD_TASKS')), 'off', 'off unless turned on');
 assert.equal(page.shown(taskField('CLOUD_TASK_GITHUB_TOKEN')), false);
-assert.equal(page.shown(taskField('CLOUD_TASK_URL')), false);
 assert.equal(page.sectionSummary('tasks'), '关');
 assert.ok(!page.sectionNeeds('tasks'));
 page.config = { fields: taskFields('on') };
 assert.equal(page.shown(taskField('CLOUD_TASK_GITHUB_TOKEN')), true);
-assert.equal(page.shown(taskField('CLOUD_TASK_URL')), true);
 assert.ok(page.sectionNeeds('tasks'), 'not known to be set up until the resident says so');
-assert.equal(page.tagText(taskField('CLOUD_TASK_TOKEN')), 'Cloudflare：CLOUD_TASK_TOKEN', 'a token kept as a Cloudflare secret is shown as such');
-assert.equal(page.cloudHost(), 'r.example');
 page.cloud = { ...page.cloud, on: true, configured: true, mode: 'local', today: 2 };
 assert.equal(page.sectionSummary('tasks'), '自己的线程 · 24 小时内派了 2 单');
 assert.ok(!page.sectionNeeds('tasks'), 'threads here need nothing more');
@@ -274,18 +268,10 @@ assert.equal(page.sectionSummary('tasks'), '自己的线程 + GitHub Actions · 
 assert.ok(!page.sectionNeeds('tasks'));
 page.cloud = { ...page.cloud, github: { ...github, on: true, problem: '这个 token 写不了工作流文件：生成时要勾上 workflow。' } };
 assert.ok(page.sectionNeeds('tasks'), 'a token that could not set the repository up needs looking at');
-page.cloud = { ...page.cloud, mode: 'all', github: { ...github, on: true, repo: 'octo/resident-hands' } };
-assert.equal(page.sectionSummary('tasks'), 'claude.ai + 自己的线程 + GitHub Actions · 24 小时内派了 2 单');
-page.cloud = { ...page.cloud, mode: 'external', today: 3, github };
-assert.equal(page.sectionSummary('tasks'), 'claude.ai + 自己的线程 · 24 小时内派了 3 单');
-page.cloud = { ...page.cloud, mode: 'incomplete', configured: false };
-assert.equal(page.sectionSummary('tasks'), '触发网址没填对 · 24 小时内派了 3 单');
-assert.ok(page.sectionNeeds('tasks'));
 // Plain words: one short line each, and the steps folded away.
 assert.match(page.groupHint(taskGroup), /线程/);
 assert.ok(!/Think|SQLite|子 agent|Harness|Cursor|Secrets|MODEL_NAME/.test(page.groupHint(taskGroup) + taskGroup.fields.map((field) => page.helpFor(field)).join('')));
 assert.match(page.helpFor(taskField('CLOUD_TASK_GITHUB_TOKEN')), /可不填/);
-assert.match(page.helpFor(taskField('CLOUD_TASK_URL')), /可不填/);
 assert.ok([page.groupHint(taskGroup), ...taskGroup.fields.map((field) => page.helpFor(field))].every((text) => text.length <= 50), 'one short line each');
 assert.ok(html.includes('<summary>怎么接</summary>'), 'the how-to is folded away');
 assert.ok(html.includes(':href="cloud.github.tokenPage"') && html.includes('去 GitHub 生成 token'), 'one tap to make the token, with its scopes ticked');
@@ -1104,7 +1090,7 @@ await aside.settle(aside.lines[0].tasks[0]);
 assert.equal(aside.lines[0].tasks[0].waiting, true, 'a put-aside that did not get through is undone');
 aside.threads = { loaded: true, on: true, threads: [{ id: 'a', status: 'needs_you', waiting: false }, { id: 'b', status: 'needs_you', waiting: true }, { id: 'c', status: 'working', waiting: false }] };
 assert.deepEqual(copy(aside.threadsIn('open').map((thread) => thread.id)), ['b', 'c'], 'a thread put aside is listed with the finished ones');
-aside.thread = { ...aside.thread, loaded: true, runs: 'external', status: 'needs_you', tasks: [{ ...waitingCard(), waiting: false }] };
+aside.thread = { ...aside.thread, loaded: true, runs: 'linux', status: 'needs_you', tasks: [{ ...waitingCard(), waiting: false }] };
 const report = { id: 'result_t_0123456789', role: 'result', task: 't_0123456789', status: 'needs_you' };
 assert.equal(aside.waitingFor(report), null);
 assert.match(aside.threadSub(), /处理过了$/);

@@ -53,7 +53,7 @@
    | 没接 Aelios，有 Anthropic 或别家的 API key | 用户把 key 存进 AI Gateway `default` 的 Provider Keys（第 7 步），模型选 `anthropic/claude-…` 这类 |
    | 没接 Aelios，有中转站的地址和 key | 用户在设置页「供应商」里填中转地址和 key，模型写 `custom/<那家的模型名>`（第 7 步） |
    | 什么 key 都没有 | 先用默认的 `@cf/zai-org/glm-4.7-flash`，免费档就能用，以后再换 |
-   | 只有 Claude 订阅（Pro、Max），没有 API key | 能用订阅聊：模型写 `claude-code/claude-opus-5-5` 这类，但要一台机器装 Claude 盒子（[claude-box.md](claude-box.md)，Google Cloud 免费小机就行）。先用免费模型装好、能聊了，再照那份装盒子、换模型。订阅也可以给住户当手脚用（README.zh-CN.md「叫云端 Claude Code 干活」） |
+   | 只有 Claude 订阅（Pro、Max），没有 API key | 能用订阅聊：模型写 `claude-code/claude-opus-5-5` 这类，但要一台机器装 Claude 盒子（[claude-box.md](claude-box.md)，Google Cloud 免费小机就行）。先用免费模型装好、能聊了，再照那份装盒子、换模型。 |
 
 5. **要哪几扇门？** 网页门一定有。Telegram 和企业微信都是选装的：
    - 要 Telegram：问用户的 Telegram 用户名（`@` 开头），住户只回白名单里的人。用户没设用户名的话，第 9 步用日志查数字 id。
@@ -64,7 +64,7 @@
 8. **接了 Aelios 的：住户跟你在别处用 Aelios 聊的，是同一个 AI 吗？** 是：第 6 步用那个助手的身份。不是：第 6 步给住户新建一个身份，问这个 AI 叫什么名字、用户希望被怎么称呼。
 9. **有没有现成的人设？** 有的话请用户给你（存成一个文件最方便），第 8 步你帮着填；不想给你就装完自己在网页上贴。
 
-搜网、读网页、语音条、表情包、叫云端 Claude Code 干活、企业微信这些，先不用问，装好能聊以后在第 10 步一项一项问。
+搜网、读网页、语音条、表情包、企业微信这些，先不用问，装好能聊以后在第 10 步一项一项问。
 
 ## 1. 准备工具，登录 Cloudflare
 
@@ -361,32 +361,6 @@ Telegram 包导进来时每张只有 emoji，它不知道什么时候发。导�
    ```
 
 下载的图看完就删掉。用户不想要表情：`STICKERS` 填 `off`。
-
-### 叫云端 Claude Code 干活
-
-要有 Claude 的付费订阅（Pro、Max 这些），默认关着。开了以后，用户叫它改代码、做文件、查一大堆资料时，它把活交给用户 claude.ai 上的一个定时任务，开一个云端 Claude Code 会话去干，用订阅的额度。问用户要不要；要的话：
-
-1. 你拿到要贴进定时任务的提示词，存成文件交给用户：
-
-   ```bash
-   curl -s <住户地址>/web/tasks -H "x-web-key: <网页钥匙>" \
-     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).prompt))' > routine-prompt.txt
-   ```
-
-2. 请用户打开 <https://claude.ai/code/routines> 新建一个定时任务：把 `routine-prompt.txt` 的内容贴进去，选好模型、要它改的仓库和云端环境。
-3. 请用户在「触发」里加一个 API，复制网址，点「生成 token」。网址不是秘密，用户可以告诉你；**token 请用户自己填**：网页门 →「···」→「后台帮忙」，或者在用户自己的终端里 `npx wrangler secret put CLOUD_TASK_TOKEN`。
-4. 请用户在这个定时任务用的云端环境里，把网络访问选「自定义」，把住户的域名（`<住户地址>` 去掉 `https://`）加进允许的网站，不然结果交不回来。
-5. 你填上开关和网址：`CLOUD_TASKS` 填 `on`，`CLOUD_TASK_URL` 填用户给的网址（形如 `https://api.anthropic.com/v1/claude_code/routines/trig_…/fire`）。
-6. 试一下：
-
-   ```bash
-   curl -sS -X POST <住户地址>/web/tasks/test -H "x-web-key: <网页钥匙>" -H "content-type: application/json" -d '{}' \
-     | grep -o '"error":"[^"]*"' || echo 派出去了
-   ```
-
-   过几分钟看 `curl -s <住户地址>/web/tasks -H "x-web-key: <网页钥匙>"`，最新那单「接通测试」的 `status` 变成 `done` 就接通了。一直是 `sent` 或 `working`：请用户点那一单的 `sessionUrl`，看会话卡在哪；多半是第 4 小步的网络没放开。
-
-`routine-prompt.txt` 交给用户以后删掉。
 
 ### 叫 GitHub Actions 干活
 

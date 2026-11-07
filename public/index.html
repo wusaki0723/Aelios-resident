@@ -22,7 +22,7 @@
 </script>
 <script>
 // Ordinary WEB_KEY pages stay entirely local. Load Telegram's bridge only on a Mini App launch.
-window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protocol === 'resident-dsh/1') && /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Promise(function (resolve) {
+window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Promise(function (resolve) {
   var script = document.createElement('script');
   script.src = 'https://telegram.org/js/telegram-web-app.js';
   script.onload = function () { resolve(true); };
@@ -34,7 +34,6 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
 <link rel="stylesheet" href="/app.css">
 <script src="/markdown.js"></script>
 <script src="/group.js"></script>
-<script src="/desktop.js"></script>
 <script src="/app.js"></script>
 <script defer src="/vendor/alpine-3.14.9.min.js"></script>
 </head>
@@ -42,8 +41,8 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
 <div class="sky" aria-hidden="true"></div>
 <div class="shell" :class="{ 'has-rail': authed && !miniApp && residents.list.length > 0, 'rail-folded': railFolded }" x-data="resident()" x-init="start()" x-cloak>
 
-  <!-- ===== the residents (src/residents.ts): a drawer on a phone; on a wide screen (a computer's browser, or the
-       DSH panel) a sidebar beside the page, with the page's own tools on top and the resident on the page as a card ===== -->
+  <!-- ===== the residents (src/residents.ts): a drawer on a phone; on a wide screen (a computer's browser) a
+       sidebar beside the page, with the page's own tools on top and the resident on the page as a card ===== -->
   <div class="rail-scrim" x-show="residents.open" x-transition.opacity @click="residents.open = false" @keydown.escape.window="residents.open = false"></div>
   <nav class="rail" x-show="authed && !miniApp && residents.list.length" :class="residents.open && 'open'" aria-label="住户们">
     <div class="rail-head">
@@ -106,9 +105,8 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
     <div class="login">
       <span class="avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="12" cy="9" r="3.5"/><path d="M5.5 19.5c1.3-3.1 3.7-4.7 6.5-4.7s5.2 1.6 6.5 4.7"/></svg></span>
       <h1>住户</h1>
-      <p x-text="desktop ? '正在连接桌面的住民…' : miniApp ? '正在确认 Telegram 身份…' : '填网页钥匙进门'"></p>
-      <button class="btn" x-show="desktop && loginError" type="button" @click="login()">重试连接</button>
-      <form x-show="!miniApp && !desktop" @submit.prevent="login()">
+      <p x-text="miniApp ? '正在确认 Telegram 身份…' : '填网页钥匙进门'"></p>
+      <form x-show="!miniApp" @submit.prevent="login()">
         <label for="web-key">网页钥匙</label>
         <div class="field-box">
           <input id="web-key" x-model="keyInput" :type="showKey ? 'text' : 'password'" autocomplete="current-password" autocapitalize="off" spellcheck="false">
@@ -295,9 +293,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
                   </template>
                   <div class="sub" x-show="task.chosen" x-text="'你选了：' + task.chosen"></div>
                   <div class="acts">
-                    <button class="icon-btn sm" type="button" x-show="!task.test && !inDsh(task)" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
-                    <button class="btn small" type="button" x-show="inDsh(task)" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)">查看 DSH 执行过程</button>
-                    <span class="sub" role="alert" x-show="inDsh(task) && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
+                    <button class="icon-btn sm" type="button" x-show="!task.test" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
                     <template x-if="task.waiting"><button class="icon-btn sm end" type="button" :disabled="Boolean(choosing)" @click="settle(task)" title="不用了" aria-label="不用了"><i class="i i-x" aria-hidden="true"></i></button></template>
                   </div>
                 </div>
@@ -706,9 +702,8 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
   </header>
   <section class="page" x-show="authed && view === 'threads'">
     <p class="status-line" x-show="threads.loaded && !threads.on">后台帮忙关着。去 设置 → 后台帮忙 打开，它才会把活交给线程。</p>
-    <p class="status-line" role="alert" x-show="desktopError" x-text="desktopError"></p>
     <template x-for="item in threadsIn('open')" :key="item.id">
-      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openTaskThread(item)" :title="inDsh(item) ?'查看 DSH 执行过程' : '打开线程'">
+      <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openThread(item.id)" title="打开线程">
         <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="taskPill(stateOf(item))" x-text="taskStatusText(stateOf(item), item.runs)"></span></span>
         <template x-if="item.status === 'sent' || item.status === 'working'"><span class="track" aria-hidden="true"><span></span></span></template>
         <span class="sub"><span x-text="runsText(item.runs) + ' · ' + item.tasks + ' 单'"></span><span x-text="fmt(item.updatedAt)"></span></span>
@@ -717,7 +712,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
     <p class="group-title" x-show="threadsIn('done').length">做完的</p>
     <div class="list" x-show="threadsIn('done').length">
       <template x-for="item in threadsIn('done')" :key="item.id">
-        <button class="li" type="button" @click="openTaskThread(item)" :title="inDsh(item) ?'查看 DSH 执行过程' : '打开线程'">
+        <button class="li" type="button" @click="openThread(item.id)" title="打开线程">
           <span class="pill" :class="taskPill(stateOf(item))" style="height: 8px; width: 8px; padding: 0; background: currentColor" aria-hidden="true"></span>
           <span class="name" x-text="item.title"></span>
           <span class="val" x-text="taskStatusText(stateOf(item), item.runs) + ' · ' + fmt(item.updatedAt)"></span>
@@ -1009,9 +1004,8 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
           </div>
         </template>
 
-        <template x-if="configSection === 'tasks' && shown(metaOf('CLOUD_TASK_URL'))">
+        <template x-if="configSection === 'tasks' && shown(metaOf('CLOUD_TASK_GITHUB_TOKEN'))">
           <div class="section">
-            <p class="error" x-show="cloud.mode === 'incomplete'">claude.ai 的触发网址或 token 没填对。</p>
             <template x-if="cloud.on && cloud.github.on">
               <div class="inline">
                 <span style="white-space: nowrap">GitHub Actions</span><span class="spacer"></span>
@@ -1026,11 +1020,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
               <summary>怎么接</summary>
               <ol class="help" style="padding-left: 28px; white-space: normal">
                 <li><strong>GitHub Actions</strong>：点「去 GitHub 生成 token」，repo 和 workflow 已经勾好，拉到底点 Generate token，复制粘到上面。住户会建一个私有仓库 <code>resident-hands</code> 在里面干活。</li>
-                <li><strong>claude.ai</strong>，有订阅时用：在 claude.ai/code/routines 新建定时任务，贴下面的提示词，触发选 API，把网址和 token 填上面。云端环境的网络里允许 <code x-text="cloudHost() || '住户的域名'"></code>。</li>
               </ol>
-              <textarea class="copy-box" readonly x-show="cloud.prompt" :value="cloud.prompt" aria-label="定时任务的提示词" @focus="$event.target.select()"></textarea>
-              <p class="hint" x-show="!cloud.prompt">先在网页上发一句话，这里才有提示词。</p>
-              <button class="icon-btn sm" type="button" x-show="cloud.prompt" @click="copyPrompt()" title="复制提示词" aria-label="复制提示词"><i class="i i-copy" aria-hidden="true"></i></button>
             </details>
             <div class="inline"><span class="spacer"></span><button class="icon-btn sm primary" type="button" :disabled="!cloud.on || Boolean(cloudBusy)" @click="testTask()" :title="cloudBusy === true ? '派出去…' : '试一下'" :aria-label="cloudBusy === true ? '派出去…' : '试一下'" :aria-busy="String(cloudBusy === true)"><i class="i i-send" aria-hidden="true"></i></button></div>
             <p class="error" x-show="cloudError" x-text="cloudError"></p>
@@ -1038,7 +1028,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
               <div class="set roles">
                 <div class="label"><span>角色</span><span class="spacer"></span>
                   <button class="icon-btn sm" type="button" x-show="!roleEdit && cloud.roles.length < 12" @click="editRole(null)" aria-label="加一个角色" title="加一个角色"><i class="i i-plus" aria-hidden="true"></i></button></div>
-                <p class="hint">派活时带上角色，要求就不用每次从头写。选的模型管住户这里和 GitHub Actions 上的线程，claude.ai 上用你订阅的模型。</p>
+                <p class="hint">派活时带上角色，要求就不用每次从头写。选的模型管住户这里和 GitHub Actions 上的线程。</p>
                 <template x-for="row in roleRows()" :key="row.key">
                   <div class="mini-row">
                     <template x-if="!editingRole(row)">
@@ -1078,9 +1068,7 @@ window.telegramReady = !(window.ResidentDesktop && window.ResidentDesktop.protoc
                     <div class="top-line"><span class="t" x-text="task.title"></span><span class="pill" :class="taskPill(stateOf(task))" x-text="taskStatusText(stateOf(task), task.runs)"></span></div>
                     <p class="hint" x-show="task.summary || task.progress" x-text="task.summary || task.progress"></p>
                     <div class="choices">
-                      <button class="icon-btn sm" type="button" x-show="!task.test && !inDsh(task)" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
-                      <button class="btn small" type="button" x-show="inDsh(task)" :disabled="Boolean(desktopOpening)" @click="openDesktopTask(task)">查看 DSH 执行过程</button>
-                      <span class="sub" role="alert" x-show="inDsh(task) && desktopErrorJob === task.id && desktopError" x-text="desktopError"></span>
+                      <button class="icon-btn sm" type="button" x-show="!task.test" @click="openThread(task.thread)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
                       <template x-for="link in taskLinks(task)" :key="link.url"><a class="btn small" :href="link.url" target="_blank" rel="noopener noreferrer" x-text="link.text"></a></template>
                     </div>
                   </div>
