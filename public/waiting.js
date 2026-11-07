@@ -1,10 +1,11 @@
 // The waiting list on the 线程 page (src/waiting.ts): what needs them, or has news, in one fixed format. It is read from
-// its own endpoint and never touches the conversation. app.js mixes this into the page's state.
+// its own endpoint and never touches the conversation. app.js mixes this into the page's state, so no name here may be
+// one app.js already has (app.js has waiting(), the typing dots).
 function waitingPage() {
   return {
-    waiting: { items: [], open: 0 },
+    waitList: { items: [], open: 0 },
     async loadWaiting() {
-      try { this.waiting = await this.api('/web/waiting'); } catch (error) { /* the threads below still work */ }
+      try { this.waitList = await this.api('/web/waiting'); } catch (error) { /* the threads below still work */ }
     },
     waitingKind(item) {
       return { ask: '等你', note: '进展', done: '做完了', stuck: '卡住了' }[item.kind] + (item.expired ? ' · 过期了' : '');
@@ -20,7 +21,7 @@ function waitingPage() {
       this.choosing = '';
     },
     async waitingRead(item) {
-      try { this.waiting = await this.api('/web/waiting/seen', { method: 'POST', body: item ? { id: item.id } : { all: true } }); } catch (error) { this.notify(error.message); }
+      try { this.waitList = await this.api('/web/waiting/seen', { method: 'POST', body: item ? { id: item.id } : { all: true } }); } catch (error) { this.notify(error.message); }
     },
     waitingOpen(item) {
       if (item.kind !== 'ask') this.waitingRead(item);

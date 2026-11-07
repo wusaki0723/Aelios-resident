@@ -5,13 +5,26 @@ import vm from 'node:vm';
 const html = readFileSync('public/index.html', 'utf8');
 const code = readFileSync('public/app.js', 'utf8');
 const markdown = readFileSync('public/markdown.js', 'utf8');
-const groupCode = readFileSync('public/group.js', 'utf8');
+// The parts app.js mixes into the page's state, as the page loads them.
+const mixins = { groupPage: 'public/group.js', machinePage: 'public/machine.js', waitingPage: 'public/waiting.js' };
 assert.ok(html.includes('<script src="/app.js"></script>'), 'the page loads its script from /app.js');
+for (const file of Object.values(mixins)) assert.ok(html.includes(`<script src="/${file.slice('public/'.length)}"></script>`), `the page loads ${file}`);
 const resized = [];
 const context = vm.createContext({ document: { documentElement: { dataset: { theme: 'dark' } } }, localStorage: { getItem() { return ''; }, setItem() {}, removeItem() {} }, setTimeout, clearTimeout, console, Date, URL, Blob, TextDecoder, TextEncoder, atob, btoa, confirm: () => true, window: {}, ResizeObserver: class { constructor(fn) { resized.push(fn); } observe() {} } });
 vm.runInContext(markdown, context);
-vm.runInContext(groupCode, context);
 vm.runInContext(code, context);
+// A mixed-in part must not reuse a name the page already has: Object.assign would replace it (waiting.js once
+// replaced app.js's waiting(), and the chat stopped drawing).
+const own = new Set(Object.keys(vm.runInContext('resident()', context)));
+const named = new Map();
+for (const [factory, file] of Object.entries(mixins)) {
+  vm.runInContext(readFileSync(file, 'utf8'), context);
+  for (const key of Object.keys(vm.runInContext(`${factory}()`, context))) {
+    assert.ok(!own.has(key), `${file} replaces app.js's ${key}`);
+    assert.ok(!named.has(key), `${file} and ${named.get(key)} both name ${key}`);
+    named.set(key, file);
+  }
+}
 // What Alpine would add to the page's state.
 vm.runInContext('function testPage() { var p = resident(); p.$nextTick = function (fn) { fn(); }; p.$refs = {}; return p; }', context);
 const page = vm.runInContext('testPage()', context);
