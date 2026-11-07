@@ -155,7 +155,8 @@ await test("a lapsed lease is unconfirmed, asked about, never handed out again; 
     assert.equal(f.tasks.get(task.id).status, "needs_you");
     assert.equal(f.store.asks(task.root)[0].key, `lease:${work.workId}`);
     assert.deepEqual((await f.store.poll(f.token, { claimKey: "ck_99999999" })).work, null);
-    const late = await f.store.receipt(f.token, final(work, { resolve: [`lease:${work.workId}`] }));
+    // The runner does not know the server's lease ask, so its final carries no resolve for it.
+    const late = await f.store.receipt(f.token, final(work));
     assert.equal(late.finished.task.status, "done");
     assert.deepEqual(f.store.asks(task.root), []);
   } finally { Date.now = now; }

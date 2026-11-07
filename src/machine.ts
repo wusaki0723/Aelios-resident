@@ -277,6 +277,8 @@ export class MachineStore {
 
   #finish(work: Work, receipt: Receipt): Finished | undefined {
     this.sql`UPDATE res_machine_work SET state = ${"done"} WHERE work_id = ${work.work_id}`;
+    // The lapsed-lease ask is the server's own; the runner never knows its key, so its final clears it.
+    this.sql`DELETE FROM res_machine_asks WHERE thread = ${work.thread} AND key = ${`lease:${work.work_id}`}`;
     const status: TaskStatus = receipt.status === "cancelled" ? "failed" : receipt.status!;
     // An ask is kept until a later receipt resolves it; the waiting list reads it.
     if (receipt.ask) {
