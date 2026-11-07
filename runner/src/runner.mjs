@@ -7,6 +7,7 @@ import { Cloud, CloudError } from "./cloud.mjs";
 import { Turn } from "./helper.mjs";
 import { launchOf } from "./plugins.mjs";
 import { lowest, tierOf } from "./permission.mjs";
+import { fit, shrink } from "./receipt.mjs";
 
 const ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 const THREAD = /^[A-Za-z0-9_.:-]{1,160}$/;
@@ -14,6 +15,12 @@ const KINDS = ["job", "say", "mail", "cancel"];
 const TEXT_MAX = 16_000;
 const SUMMARY_MAX = 4000;
 const safeId = id => (THREAD.test(id) ? id : "acp_" + createHash("sha1").update(id).digest("hex").slice(0, 24));
+
+/** Remember a question that is open on a thread, so a later finished turn can close it. */
+function remember(state, thread, key) {
+  const entry = (state.threads[thread] ??= { asks: [] });
+  if (!entry.asks.includes(key)) entry.asks.push(key);
+}
 
 function redactor(secrets, places) {
   return text => {
@@ -29,7 +36,7 @@ export class Runner {
   constructor({ config, state, cloud, log = () => {}, request = fetch }) {
     this.config = config; this.state = state; this.log = log; this.request = request;
     this.cloud = cloud ?? null;
-    this.live = null; this.running = null; this.flushing = null; this.shuttingDown = false;
+    this.live = null; this.running = null; this.flushing = null; this.shuttingDown = false; this.revoked = false;
     this.error = ""; this.lastBeat = 0;
     this.pollMs = config.pollMs ?? 5000; this.heartbeatMs = config.heartbeatMs ?? 30_000;
   }
@@ -44,7 +51,7 @@ export class Runner {
   // ---- receipts -----------------------------------------------------------------------------------------------
 
   #receipt(work, type, extra = {}) {
-    return { receiptId: `${work.workId}:${type}`, workId: work.workId, token: work.token, type, ...extra };
+    return fit({ receiptId: `${work.workId}:${type}`, workId: work.workId, token: work.token, type, ...extra });
   }
 
   async #queueReceipts(receipts, change = () => {}) {
@@ -60,14 +67,20 @@ export class Runner {
     this.flushing ??= (async () => {
       try {
         const cloud = await this.#cloud();
-        for (const receipt of (await this.state.read()).outbox) {
-          try { await cloud.receipt(receipt); }
-          catch (error) {
-            if (!(error instanceof CloudError) || error.revoked) throw error;
-            if (error.retry) { this.error = "云端暂时连不上，回执留着，稍后重发。"; return; }
-            this.log("receipt dropped", receipt.receiptId, error.code || error.status); // it will never be accepted
+        for (let receipt of (await this.state.read()).outbox) {
+          const id = receipt.receiptId;
+          for (;;) {
+            try { await cloud.receipt(receipt); break; }
+            catch (error) {
+              if (!(error instanceof CloudError) || error.revoked) throw error;
+              if (error.retry) { this.error = "云端暂时连不上，回执留着，稍后重发。"; return; }
+              const smaller = error.status === 413 ? shrink(receipt) : null; // too big: send a shorter one, do not lose the result
+              if (!smaller) { this.log("receipt dropped", id, error.code || error.status); break; } // it will never be accepted
+              await this.state.update(state => { state.outbox = state.outbox.map(item => (item.receiptId === id ? smaller : item)); });
+              receipt = smaller;
+            }
           }
-          await this.state.update(state => { state.outbox = state.outbox.filter(item => item.receiptId !== receipt.receiptId); });
+          await this.state.update(state => { state.outbox = state.outbox.filter(item => item.receiptId !== id); });
         }
         this.error = "";
       } finally { this.flushing = null; }
@@ -126,11 +139,11 @@ export class Runner {
 
   // ---- running work -------------------------------------------------------------------------------------------
 
-  kick() { this.running ??= this.#drain().finally(() => { this.running = null; }); }
+  kick() { if (this.revoked) return; this.running ??= this.#drain().finally(() => { this.running = null; }); }
 
   async #drain() {
     for (;;) {
-      if (this.shuttingDown) return;
+      if (this.shuttingDown || this.revoked) return;
       const work = await this.state.update(state => { const next = state.queue.shift() ?? null; state.current = next; return next; });
       if (!work) return;
       this.live = { work, turn: null, pendingCancel: false };
@@ -138,7 +151,7 @@ export class Runner {
       catch (error) {
         this.log("execute failed", work.workId, error?.message);
         await this.#queueReceipts([this.#receipt(work, "final", { status: "needs_you", summary: "runner 处理这条消息时出了错，不会自动重做。",
-          ask: { key: "runner:" + work.workId, question: "runner 处理这条消息时出了错，没有确认结果。要不要再试一次？" } })]);
+          ask: { key: "runner:" + work.workId, question: "runner 处理这条消息时出了错，没有确认结果。要不要再试一次？" } })], state => remember(state, work.thread, "runner:" + work.workId));
       } finally {
         this.live = null;
         await this.state.update(state => { state.current = null; });
@@ -171,10 +184,9 @@ export class Runner {
     }
     const receipt = { status: outcome.status, summary: outcome.summary || "（没有内容）" };
     await this.state.update(s => {
+      if (outcome.status === "needs_you" && outcome.ask) remember(s, work.thread, outcome.ask.key);
       const entry = s.threads[work.thread];
-      if (!entry) return;
-      if (outcome.status === "needs_you" && outcome.ask && !entry.asks.includes(outcome.ask.key)) entry.asks.push(outcome.ask.key);
-      if (outcome.status === "done" && entry.asks.length) { receipt.resolve = entry.asks; entry.asks = []; }
+      if (outcome.status === "done" && entry?.asks.length) { receipt.resolve = entry.asks; entry.asks = []; }
     });
     if (outcome.sessionId) receipt.sessionId = safeId(outcome.sessionId);
     if (outcome.ask) receipt.ask = outcome.ask;
@@ -187,14 +199,25 @@ export class Runner {
     if (!state.current) return;
     const work = state.current;
     await this.#queueReceipts([this.#receipt(work, "final", { status: "needs_you", summary: "runner 重启过，这一轮的结果没有确认。不会自动重做，请看一下线程的状态。",
-      ask: { key: "restart:" + work.workId, question: "runner 重启过，这一轮的结果没有确认。要不要再做一次？" } })], s => { s.current = null; });
+      ask: { key: "restart:" + work.workId, question: "runner 重启过，这一轮的结果没有确认。要不要再做一次？" } })],
+    s => { s.current = null; remember(s, work.thread, "restart:" + work.workId); });
+  }
+
+  /** Pairing was withdrawn: stop the running turn, drop what is waiting. Nothing is claimed or started again. */
+  async #revoke() {
+    this.revoked = true;
+    await this.state.update(s => { if (s.device) s.device.revoked = true; s.queue = []; s.claimKey = null; s.outbox = []; });
+    this.#stopLive();
+    this.error = "配对已被撤销，runner 已停下，排着的活不再跑。";
+    this.log(this.error);
   }
 
   // ---- the loop -----------------------------------------------------------------------------------------------
 
   async tick() {
     const state = await this.state.read();
-    if (!state.device || state.device.revoked) return;
+    if (!state.device) return;
+    if (state.device.revoked) { if (!this.revoked) await this.#revoke(); return; }
     try {
       const cloud = await this.#cloud();
       if (Date.now() - this.lastBeat >= this.heartbeatMs) {
@@ -209,7 +232,7 @@ export class Runner {
       this.kick();
       this.error = "";
     } catch (error) {
-      if (error.revoked) { await this.state.update(s => { if (s.device) s.device.revoked = true; }); this.error = "配对已被撤销，runner 不再领活。"; this.log(this.error); return; }
+      if (error.revoked) { await this.#revoke(); return; }
       this.error = error.retry ? "云端暂时连不上。" : `云端拒绝了请求（${error.code || error.status || error.message}）。`;
       this.log("tick", this.error);
     }
@@ -217,8 +240,9 @@ export class Runner {
 
   async start(signal) {
     await this.recover();
+    if ((await this.state.read()).device?.revoked) await this.#revoke();
     this.kick(); // work left in the queue by an earlier run goes on
-    while (!signal.aborted) {
+    while (!signal.aborted && !this.revoked) {
       await this.tick();
       await new Promise(resolve => {
         const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };

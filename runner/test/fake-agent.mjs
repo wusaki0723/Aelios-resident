@@ -2,7 +2,8 @@
 // A pretend ACP helper for the tests. It speaks the protocol on stdio and acts out what the prompt text says:
 //   SLOW       waits until session/cancel, then ends the turn "cancelled"
 //   SLEEP:n    works for n ms, then finishes
-//   ASK        ends with a question
+//   ASKME      ends with the ASK: line
+//   QUESTION   ends with a plain question (no marker)
 //   CRASH      dies mid-turn
 //   PERM:kind[:path]   asks permission first and says what it was told
 //   CWD        says the folder it was started in
@@ -30,9 +31,9 @@ store(data => data.log.push({ event: "start", args }));
 process.stdout.write("this line is not JSON, a client must skip it\n");
 
 async function prompt(id, params) {
-  const { sessionId } = params, text = params.prompt.map(part => part.text).join("");
+  const { sessionId } = params, full = params.prompt.map(part => part.text).join(""), text = full.split("\n\nOnly if you")[0];
   const session = load().sessions[sessionId];
-  store(data => data.log.push({ event: "prompt", sessionId, text, cwd: session?.cwd }));
+  store(data => data.log.push({ event: "prompt", sessionId, text, full, cwd: session?.cwd }));
   chunk(sessionId, "starting. ");
   send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "look around", kind: "read" } } });
   if (text.includes("CRASH")) process.exit(3);
@@ -52,8 +53,10 @@ async function prompt(id, params) {
       options: [{ optionId: "always", name: "Always", kind: "allow_always" }, { optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "reject", name: "Reject", kind: "reject_once" }] });
     said = ` perm=${outcome.outcome?.optionId ?? outcome.outcome?.outcome}`;
   }
+  const long = /LONG:(\d+)/.exec(text);
+  if (long) said += " " + "字".repeat(Number(long[1]));
   if (text.includes("CWD")) said += ` cwd=${session?.cwd}`;
-  chunk(sessionId, text.includes("ASK") ? "我先做哪一个？" : `done: ${text}${said}`);
+  chunk(sessionId, text.includes("ASKME") ? "我需要你定一下。\nASK: 我先做哪一个？" : text.includes("QUESTION") ? "做完了，要我继续吗？" : `done: ${text}${said}`);
   send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
 }
 

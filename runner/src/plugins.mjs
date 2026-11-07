@@ -5,7 +5,7 @@ import path from "node:path";
 
 const DSH_APP = "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh";
 
-function onPath(name) {
+export function onPath(name) {
   for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
     if (!dir) continue;
     try { accessSync(path.join(dir, name), constants.X_OK); return path.join(dir, name); } catch { /* next */ }
@@ -21,7 +21,7 @@ export const PLUGINS = {
   },
   // dsh --profile acp (DeepSeek Harness's automation-only ACP server). It resumes with session/resume, not session/load.
   dsh: {
-    bin: () => onPath("dsh") ?? (process.platform === "darwin" && onPath(DSH_APP) ? DSH_APP : "dsh"),
+    bin: () => onPath("dsh") ?? (process.platform === "darwin" && available(DSH_APP) ? DSH_APP : "dsh"),
     args: () => ["--profile", "acp"]
   },
   // Any other ACP helper (e.g. Claude Code's adapter, experimental): config.command = ["bin", "arg", ...].
@@ -38,4 +38,10 @@ export function launchOf(config, tier) {
   }
   const bin = config.bin ?? process.env[`AELIOS_RUNNER_${config.plugin.toUpperCase()}_BIN`] ?? plug.bin();
   return { command: bin, args: [...plug.args(tier), ...(config.args ?? [])], env: config.env ?? {} };
+}
+
+/** Can this command be started at all? Looked for on PATH, or at its path when it has one. */
+export function available(command) {
+  if (!command.includes("/")) return Boolean(onPath(command));
+  try { accessSync(command, constants.X_OK); return true; } catch { return false; }
 }

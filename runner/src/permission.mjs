@@ -20,16 +20,20 @@ function inside(root, file) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-/** @returns {{allow: boolean, why: string}} */
+/**
+ * Only what the helper asks about is judged, and only by what it says: the kind of the operation and the paths it names.
+ * Below "full", a request that names a path outside the working folder is always turned down, whatever its kind.
+ * @returns {{allow: boolean, why: string}}
+ */
 export function judge(tier, toolCall, cwd) {
   const kind = typeof toolCall?.kind === "string" ? toolCall.kind : "other";
   if (tier === "full") return { allow: true, why: "" };
+  const files = (Array.isArray(toolCall?.locations) ? toolCall.locations : []).map(place => place?.path);
+  if (files.some(file => !inside(cwd, file))) return { allow: false, why: "请求里的路径不在工作目录里" };
   if (READ.has(kind)) return { allow: true, why: "" };
   if (tier === "edit" && EDIT.has(kind)) {
-    if (kind !== "edit") return { allow: true, why: "" };
-    const files = (toolCall.locations ?? []).map(place => place?.path);
-    if (files.length && files.every(file => inside(cwd, file))) return { allow: true, why: "" };
-    return { allow: false, why: "编辑的位置不在工作目录里，或没有说明位置" };
+    if (kind !== "edit" || files.length) return { allow: true, why: "" };
+    return { allow: false, why: "编辑没有说明位置" };
   }
   return { allow: false, why: `档位 ${tier} 不允许「${kind}」` };
 }

@@ -9,7 +9,7 @@ export class FakeCloud {
   constructor() {
     this.works = []; this.claims = new Map(); this.receipts = new Map(); this.accepted = []; this.polls = []; this.beats = 0;
     this.deviceToken = "rr_" + crypto.randomBytes(16).toString("hex");
-    this.down = false; this.drops = {}; // drops.poll = 1: handle the next poll, then cut the line before answering
+    this.down = false; this.revoked = false; this.maxBytes = 16 * 1024; this.drops = {}; // drops.poll = 1: handle the next poll, then cut the line before answering
     this.seq = 0;
   }
   async listen() {
@@ -45,6 +45,8 @@ export class FakeCloud {
       return send(200, { runnerId: "run_1", token: this.deviceToken, protocol: "aelios-runner/1" });
     }
     if (this.down) return send(503, { error: "down" });
+    if (this.revoked) return send(401, { error: "revoked", code: "UNAUTHORIZED" });
+    if (Buffer.byteLength(raw) > this.maxBytes) return send(413, { error: "too large", code: "BODY_TOO_LARGE" });
     if (req.headers.authorization !== "Bearer " + this.deviceToken) return send(401, { error: "bad token", code: "UNAUTHORIZED" });
     const reply = (status, value) => {
       if (this.drops[action] > 0) { this.drops[action]--; return req.socket.destroy(); } // the cloud did it; the runner never hears

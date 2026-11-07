@@ -18,11 +18,11 @@ test("pair writes config and state (0600) without the web key; status reads them
     const run = (...args) => new Promise((resolve, reject) => execFile(process.execPath, [BIN, ...args], { env }, (error, out, err) => (error ? reject(new Error(err)) : resolve(out))));
     await assert.rejects(run("pair", "--url", cloud.url, "--workspace", path.join(home, "w"), "--plugin", "command"), /command/); // a plug that cannot start is refused before pairing
     assert.equal(readdirSync(home).includes("h"), false, "nothing is written when pairing fails");
-    const out = await run("pair", "--url", cloud.url, "--workspace", path.join(home, "w"), "--access", "edit", "--plugin", "dsh");
+    const out = await run("pair", "--url", cloud.url, "--workspace", path.join(home, "w"), "--access", "edit", "--plugin", "command", "--command", JSON.stringify([process.execPath, "-e", ""]));
     assert.match(out, /Paired/);
     for (const file of readdirSync(path.join(home, "h"))) assert.ok(!readFileSync(path.join(home, "h", file), "utf8").includes("web-key"));
     const status = JSON.parse(await run("status"));
-    assert.deepEqual([status.paired, status.plugin, status.access], [true, "dsh", "edit"]);
+    assert.deepEqual([status.paired, status.plugin, status.access], [true, "command", "edit"]);
     await assert.rejects(run("pair", "--url", cloud.url, "--workspace", path.join(home, "w")), /already paired/);
   } finally { await cloud.close(); rmSync(home, { recursive: true, force: true }); }
 });

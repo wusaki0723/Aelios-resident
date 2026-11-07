@@ -6,7 +6,13 @@ import { AcpClosed, AcpConnection, AcpError, PROTOCOL_VERSION } from "./acp.mjs"
 import { answer } from "./permission.mjs";
 
 const short = text => createHash("sha1").update(text).digest("hex").slice(0, 12);
-const QUESTION = /[?？]\s*["”」』)）]*\s*$/;
+/** Added to every prompt. The only way a reply asks the user for a decision; a question mark means nothing. */
+export const CONVENTION = "Only if you cannot go on without a decision from the user, end your reply with one last line that starts with `ASK:` followed by the question. Otherwise just finish, and do not end by asking whether to continue.";
+const marker = text => {
+  const lines = text.trimEnd().split("\n"), last = lines.at(-1).trim();
+  if (!last.startsWith("ASK:")) return null;
+  return { question: last.slice(4).trim(), body: lines.slice(0, -1).join("\n").trim() };
+};
 
 export class Turn {
   /**
@@ -73,7 +79,7 @@ export class Turn {
       this.timer = setTimeout(() => { this.timedOut = true; this.cancel(); }, this.timeoutMs);
       this.timer.unref?.();
       this.collecting = true;
-      const result = await this.conn.request("session/prompt", { sessionId: this.opened, prompt: [{ type: "text", text: this.prompt }] });
+      const result = await this.conn.request("session/prompt", { sessionId: this.opened, prompt: [{ type: "text", text: `${this.prompt}\n\n${CONVENTION}` }] });
       return this.#outcome(String(result.stopReason ?? "end_turn"), how);
     } catch (error) {
       if (this.cancelled && !this.timedOut) return this.#cancelled(how);
@@ -115,7 +121,11 @@ export class Turn {
       return { ...base, status: "needs_you", summary, ask: { key: "perm:" + short(list), question: this.redact(`帮手想做下面这些，但这台机器的档位是 ${this.tier}，已拒绝：\n${list}`) } };
     }
     if (!final) return { ...base, status: "needs_you", summary: "这一轮结束了，但帮手没有留下文字结果。", ask: { key: "silent:" + short(String(this.opened) + Date.now()), question: "这一轮结束了，但帮手没有留下文字结果，要不要再问一次？" } };
-    if (QUESTION.test(final)) return { ...base, status: "needs_you", summary: this.redact(final), ask: { key: "q:" + short(final), question: this.redact(final.slice(-1500)) } };
+    const asked = marker(final);
+    if (asked) {
+      const question = this.redact(asked.question || "（帮手要你拍板，但没写问题）");
+      return { ...base, status: "needs_you", summary: this.redact(asked.body || question), ask: { key: "q:" + short(final), question } };
+    }
     return { ...base, status: "done", summary: this.redact(final) };
   }
 }

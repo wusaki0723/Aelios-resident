@@ -2,42 +2,15 @@
 // Every case runs once per plug (kiro, dsh): the plug only changes how the helper is started.
 // Run: node --test --test-concurrency=1 test/
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { CloudError, register } from "../src/cloud.mjs";
-import { Runner } from "../src/runner.mjs";
-import { StateFile } from "../src/state.mjs";
 import { FakeCloud } from "./fake-cloud.mjs";
 
-const AGENT = path.join(path.dirname(fileURLToPath(import.meta.url)), "fake-agent.mjs");
-chmodSync(AGENT, 0o755);
-
-async function rig(plugin, extra = {}) {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "runner-test-")));
-  const cloud = await new FakeCloud().listen();
-  const store = path.join(dir, "agent.json");
-  writeFileSync(store, JSON.stringify({ sessions: {}, log: [], n: 0 }));
-  const workspace = path.join(dir, "work");
-  const config = { url: cloud.url, resident: "default", workspace, access: "edit", plugin, bin: AGENT, env: { FAKE_STORE: store },
-    pollMs: 20, heartbeatMs: 20, killAfterMs: 400, ...extra };
-  const state = new StateFile(path.join(dir, "state.json"));
-  await state.update(s => { s.device = { runnerId: "run_1", token: cloud.deviceToken }; });
-  const rig = { dir, cloud, state, config, workspace, store, stopped: false };
-  rig.log = () => JSON.parse(readFileSync(store, "utf8")).log;
-  rig.prompts = () => rig.log().filter(e => e.event === "prompt");
-  rig.start = () => {
-    rig.control = new AbortController();
-    rig.runner = new Runner({ config, state });
-    rig.loop = rig.runner.start(rig.control.signal);
-  };
-  rig.stop = async () => { if (rig.control && !rig.stopped) { rig.stopped = true; rig.control.abort(); await rig.loop; } };
-  rig.done = async () => { await rig.stop(); await cloud.close(); rmSync(dir, { recursive: true, force: true }); };
-  return rig;
-}
-const final = (r, work) => r.cloud.until(() => r.cloud.finals(work.workId)[0], "final of " + work.workId);
+import { CONVENTION } from "../src/helper.mjs";
+import { final, rig } from "./rig.mjs";
 
 for (const plugin of ["kiro", "dsh"]) {
   const t = (name, fn) => test(`[${plugin}] ${name}`, async () => { const r = await rig(plugin); try { await fn(r); } finally { await r.done(); } });
@@ -53,6 +26,7 @@ for (const plugin of ["kiro", "dsh"]) {
     assert.equal(started.sessionId, "sess-1");
     const [prompt] = r.prompts();
     assert.equal(prompt.text, "hello CWD");
+    assert.equal(prompt.full, `hello CWD\n\n${CONVENTION}`, "the instruction, then the one-line ASK: convention, nothing about who the user is");
     assert.equal(prompt.cwd, r.workspace, "extra fields from the cloud do not choose the folder");
     const init = r.log().find(e => e.event === "initialize");
     assert.deepEqual(init.caps, {}, "no file or terminal capability is offered");
@@ -122,12 +96,20 @@ for (const plugin of ["kiro", "dsh"]) {
     assert.ok(order.indexOf(`${first.workId}:final`) < order.indexOf(`${mail.workId}:started`));
   });
 
-  t("a question from the helper is needs_you with an ask, and the next finished turn resolves it", async r => {
+  t("a plain question mark at the end is just a finished job", async r => {
     r.start();
-    const asked = await final(r, r.cloud.push({ text: "ASK which one" }));
+    const done = await final(r, r.cloud.push({ text: "QUESTION please" }));
+    assert.equal(done.status, "done");
+    assert.equal(done.ask, undefined);
+  });
+
+  t("an ASK: line is needs_you with an ask, and the next finished turn resolves it", async r => {
+    r.start();
+    const asked = await final(r, r.cloud.push({ text: "ASKME which one" }));
     assert.equal(asked.status, "needs_you");
     assert.match(asked.ask.key, /^q:/);
-    assert.match(asked.ask.question, /我先做哪一个/);
+    assert.equal(asked.ask.question, "我先做哪一个？");
+    assert.equal(asked.summary, "我需要你定一下。");
     const next = await final(r, r.cloud.push({ kind: "say", text: "the first one" }));
     assert.equal(next.status, "done");
     assert.deepEqual(next.resolve, [asked.ask.key]);
@@ -138,7 +120,7 @@ for (const plugin of ["kiro", "dsh"]) {
   t("permissions, tier edit: an edit inside the folder is allowed, one outside is turned down and asked about", async r => {
     const inside = await perm(r, `PERM:edit:${path.join(os.tmpdir(), "not-yet")}`);
     assert.equal(inside.status, "needs_you", "outside the folder");
-    assert.match(inside.ask.question, /编辑的位置不在工作目录里/);
+    assert.match(inside.ask.question, /路径不在工作目录里/);
     assert.match(inside.summary, /perm=reject/);
     const ok = await final(r, r.cloud.push({ text: `PERM:edit:${path.join(r.workspace, "a.txt")}` }));
     assert.equal(ok.status, "done");

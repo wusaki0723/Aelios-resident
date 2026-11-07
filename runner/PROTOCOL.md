@@ -11,7 +11,7 @@
 4. 领活幂等：同一个 `claimKey` 重来，拿回同一份活。
 5. 每份活有自己的 `token`，只对这份活有效。回执带 `workId` + `token`。
 6. 回执带 `receiptId`，可重放：内容相同返回 `duplicate`，内容不同返回 409。
-7. 帮手不知道用户是谁：云端写进 `text` / `instruction` 的内容里不放用户的名字和人设。runner 原样转给帮手，不加任何东西。
+7. 帮手不知道用户是谁：云端写进 `text` / `instruction` 的内容里不放用户的名字和人设。runner 原样转给帮手，只在后面加一句英文的 `ASK:` 约定（见下）。
 
 ## 地址
 
@@ -26,8 +26,9 @@
 | `POST {P}/runner/v1/receipt` | runner | 同上 |
 
 请求体是 JSON 对象，每个请求最多 16 KB。出错时返回 `{error, code}` 加状态码。
-- 401 `UNAUTHORIZED`：配对被撤销。runner 停止领活。
-- 409 `INVALID_TOKEN` / `UNKNOWN_WORK`、400：这条回执永远不会被收，runner 丢掉它。
+- 401 `UNAUTHORIZED`：配对被撤销。**撤销 = 停下**：runner 取消正在跑的一轮，排着的活不再跑，没发出去的回执丢掉，然后退出。
+- 413：回执太大。runner 把文字截短一半再发，不丢结果；截到不能再短才放弃。runner 自己发之前也会按字节把整份回执截到 15,000 字节以内（长的是 `summary` 和 `ask.question`，`resolve` 最多 50 项）。
+- 409 `INVALID_TOKEN` / `UNKNOWN_WORK`、其它 400：这条回执永远不会被收，runner 丢掉它。
 - 429、5xx、连不上：runner 留着，下个周期重发。
 
 一个住户同时有几个 runner，由云端定；runner 只认自己的 token。
@@ -89,7 +90,7 @@
   "sessionId": "…",           // 可选，ACP 会话号（不透明，最多 160 位；过不了校验就换成短摘要）
   // 只有 final 带下面这些：
   "status": "done",           // done | failed | needs_you | cancelled
-  "summary": "…",             // 最多 4000 字，已去掉本机路径和凭据
+  "summary": "…",             // 最多 4000 字；runner 把里面原样出现的工作目录路径和 token 换掉，别的不处理
   "ask":    { "key": "…", "question": "…", "options": ["…"], "recommend": "…" },
   "notice": { "text": "…", "fyi": true },
   "resolve": ["key", "…"]
@@ -98,7 +99,7 @@
 
 - `started`：帮手会话已经建好或接回，开始跑。`queued`：这封 `mail` 排在后面了。`final`：这份活到头了，一份活只有一个 `final`。
 - `status` 的意思：`done` 做完；`failed` 没做成（帮手报错）；`needs_you` 需要用户拍板，**必带 `ask`**；`cancelled` 被 `say` 打断或被 `cancel` 停下。
-- **`ask`** 是"等咲咲"列表里的一项。`key` 是同一件事的稳定编号：同一个 `key` 开着就不重复问。云端把它列进"等你"，不刷聊天。`options` 和 `recommend` 可选。
+- **`ask`** 是"等你"列表里的一项。`key` 是同一件事的稳定编号：同一个 `key` 开着就不重复问。云端把它列进"等你"，不刷聊天。`options` 和 `recommend` 可选。
 - **`notice`** 只告知；`fyi:true` 表示不需要回应。
 - **`resolve`** 是 `key` 的列表：这些问题现在自己好了（用户回答了，或后续一轮已经做完），云端把对应的卡片收掉。runner 在某个线程做完（`done`）后，把这个线程还开着的 `ask` 全部放进 `resolve`。
 - 同一个 `receiptId` 重发：内容一样返回 `{ok:true, duplicate:true}`，不一样返回 409 `RECEIPT_CONFLICT`。
@@ -109,6 +110,8 @@
 ## runner 的本机规则（不在协议里，但云端要知道）
 
 - 每个线程固定一个工作目录，第一次用时定下，之后不变。
-- 权限请求（`session/request_permission`）按档位自动答：`read` 只许读/搜索；`edit` 加工作目录里的编辑；`full` 都许。只选"只这一次"，不留长期许可。被拒的请求会让这一轮交 `needs_you`，`ask` 里写明被拒的是什么。
-- 帮手的最后一条消息以问号结尾，也交 `needs_you`，`ask.question` 是那段话。
-- 帮手的输出和仓库里的文字都只是数据：它们不能决定派给谁、在哪个目录、用什么权限。
+- 权限请求（`session/request_permission`）按档位自动答：`read` 只许读/搜索/思考；`edit` 再加工作目录里的编辑，**也放行 `fetch`（联网）**；`full` 都许。只选"只这一次"，不留长期许可。被拒的请求会让这一轮交 `needs_you`，`ask` 里写明被拒的是什么。
+- 除 `full` 外，请求里带路径（`locations`）而且有一个在工作目录外（符号链接指出去的也算外面），一律拒。
+- **这条拦截的边界：只拦帮手主动来问的请求，而且只看它自己报的类型和路径。** 帮手如果不问就直接读（比如 `read` 档下读 `~/.ssh`），或者请求里没写路径，runner 看不见也拦不住；被注入的活可能因此把本机文件读出来带回云端。真要隔离，用专门的系统账号或一台里面没有敏感文件的 VPS 跑 runner，并在帮手自己的设置里收紧它的读写范围。
+- 真正需要用户拍板时，帮手要把回复的**最后一行单独写成 `ASK:` 开头，后面跟问题**。runner 在每条发给帮手的内容后面都加一句英文约定说明这一点（不含任何人名或人设）。只有这个标记和被拒的权限请求才交 `needs_you`；回复以问号结尾不算，当普通做完。
+- 帮手的输出和仓库里的文字都只是数据：它们不能决定派给谁、在哪个目录、用什么权限。注意它们能写出 `ASK:` 行，所以一张"等你"卡片只说明有人想问，不说明问得对。
