@@ -715,7 +715,7 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
               <template x-for="(option, i) in item.options" :key="option">
                 <button class="btn small" :class="i === 0 && 'primary'" type="button" :disabled="Boolean(choosing)" @click="waitingAnswer(item, option)" x-text="option"></button>
               </template>
-              <button class="btn small" type="button" @click="waitingOpen(item)">打开线程</button>
+              <button class="icon-btn sm" type="button" @click="waitingOpen(item)" title="打开线程" aria-label="打开线程"><i class="i i-open" aria-hidden="true"></i></button>
               <button class="icon-btn sm" type="button" x-show="item.kind !== 'ask'" @click="waitingRead(item)" title="已读" aria-label="已读"><i class="i i-x" aria-hidden="true"></i></button>
             </span>
           </div>
@@ -792,7 +792,7 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
       </template>
     </div>
     <div class="links" x-show="thread.runs === 'machine' && thread.status === 'working'">
-      <button class="btn small" type="button" :disabled="threadBusy" @click="stopThread()">叫它停下</button>
+      <button class="icon-btn sm" type="button" :disabled="threadBusy" @click="stopThread()" title="叫它停下" aria-label="叫它停下"><i class="i i-stop" aria-hidden="true"></i></button>
     </div>
     <div class="thread-say" x-show="thread.canSay">
       <textarea x-model="threadDraft" rows="2" placeholder="直接跟它说，不经过住户" aria-label="跟线程说"></textarea>

@@ -15,8 +15,8 @@ import path from "node:path";
 const WORKER = "http://127.0.0.1:8787";
 const KEY = "test-web-key";
 const RUNNER_REPO = "https://github.com/Aelios-project/Aelios-desktop.git";
-// Pinned to the runner with NOTE:/BLOCKED:/ASK: on the Aelios-desktop branch crew/waiting-list-spec (PR #2). Change it to the merge commit on main once PR #1 and #2 are merged.
-const RUNNER_COMMIT = "d58f79bb6a00ebb89b4c41744d62097c8049f9c2";
+// Pinned to the runner with NOTE:/BLOCKED:/ASK: on the Aelios-desktop branch crew/waiting-list-spec (PR #2). A normal merge keeps this commit in main's history, so the pin stays valid.
+const RUNNER_COMMIT = "5fcab7e85032e299209b8b32c2a5b2d072253105";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const web = async (route, body) => {
   const response = await fetch(`${WORKER}${route}`, { method: body ? "POST" : "GET", headers: { "x-web-key": KEY, ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });

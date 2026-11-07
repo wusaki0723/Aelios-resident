@@ -1911,10 +1911,7 @@ export class Resident extends Think<Env> {
 
   async taskWorkerFinished(id: string, code: string, result: unknown): Promise<void> {
     const task = this.workerTask(id, code);
-    if (["sent", "working", "quiet"].includes(task.status)) {
-      await this.taskReport(id, code, "result", result);
-      await this.pushWaitingAsks();
-    }
+    if (["sent", "working", "quiet"].includes(task.status)) await this.taskReport(id, code, "result", result);
   }
 
   /** Starts a task on its thread here: the thread keeps its conversation and files, and does its tasks in turn. */
@@ -1947,6 +1944,7 @@ export class Resident extends Think<Env> {
     const result = parseResult(body);
     if ("error" in result) return { status: 400, body: result };
     if (store.result(id, result)) await this.tellAboutTask(store.get(id)!, (task) => resultNote(task));
+    await this.pushWaitingAsks();
     return { status: 200, body: { ok: true } };
   }
 
