@@ -50,7 +50,7 @@ const FILES_SHOWN = 10;
 const FILES_KEPT = 300;
 const FILES_LOOKS = 30;
 
-export type TaskStatus = "sent" | "working" | "done" | "failed" | "needs_you" | "quiet";
+export type TaskStatus = "sent" | "working" | "done" | "failed" | "needs_you" | "quiet" | "stopped";
 const REPORTED: readonly TaskStatus[] = ["done", "failed", "needs_you"];
 
 /** Where a task runs (see the top of this file). */

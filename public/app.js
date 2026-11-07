@@ -237,7 +237,7 @@ function resident() {
   };
   // How a cloud task stands, in words (cloud-tasks.ts TaskStatus).
   // chosen and settled: a task that waited for her and no longer does (stateOf).
-  var TASK_STATUS = { sent: '派出去了', working: '在干活', done: '做完了', failed: '没做成', needs_you: '等你拍板', quiet: '没回音', chosen: '拍板了', settled: '处理过了' };
+  var TASK_STATUS = { sent: '派出去了', working: '在干活', done: '做完了', failed: '没做成', needs_you: '等你拍板', quiet: '没回音', stopped: '已停下', chosen: '拍板了', settled: '处理过了' };
   // A tool call in a few words (its name when it is none of these).
   var TOOL_WORDS = {
     memory_recall: '翻了记忆', memory_remember: '记下了', memory_notebook: '翻了小本本', memory_forget: '忘掉了', memory_keep_moment: '存了一刻',
@@ -1860,6 +1860,7 @@ function resident() {
       try {
         var data = await this.api('/web/threads');
         this.threads = { loaded: true, on: Boolean(data.on), threads: data.threads || [] };
+        this.loadWaiting();
       } catch (error) {
         this.notify(error.message);
       }
@@ -3107,5 +3108,5 @@ function resident() {
       this.toast = message;
       setTimeout(function () { if (self.toast === message) self.toast = ''; }, 2400);
     }
-  }, typeof groupPage === 'function' ? groupPage() : {}, typeof machinePage === 'function' ? machinePage() : {});
+  }, typeof groupPage === 'function' ? groupPage() : {}, typeof machinePage === 'function' ? machinePage() : {}, typeof waitingPage === 'function' ? waitingPage() : {});
 }

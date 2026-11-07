@@ -14,8 +14,20 @@ function machinePage() {
       try {
         var data = await this.api('/web/runner/code', { method: 'POST', body: {} });
         this.machine.code = data.code; this.machine.expiresAt = data.expiresAt;
+        this.watchPairing();
       } catch (error) { this.machine.error = error.message; }
       this.machine.busy = false;
+    },
+    // After a code is made, look again every few seconds until the machine is there or the code has run out.
+    watchPairing() {
+      var self = this;
+      clearInterval(this.machine.timer);
+      this.machine.timer = setInterval(async function () {
+        if (!self.machine.code || Date.now() > self.machine.expiresAt + 30000) { clearInterval(self.machine.timer); return; }
+        await self.loadMachine();
+        if (self.machine.machine && self.machine.machine.online) { clearInterval(self.machine.timer); self.machine.code = ''; }
+        else if (!self.machine.code) clearInterval(self.machine.timer);
+      }, 3000);
     },
     async machineRevoke() {
       if (!this.machine.machine || !confirm('撤销这台机器？它正在干的会停下，排着的不再做。')) return;

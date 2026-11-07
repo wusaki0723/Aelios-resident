@@ -35,6 +35,7 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
 <script src="/markdown.js"></script>
 <script src="/group.js"></script>
 <script src="/machine.js"></script>
+<script src="/waiting.js"></script>
 <script src="/app.js"></script>
 <script defer src="/vendor/alpine-3.14.9.min.js"></script>
 </head>
@@ -703,6 +704,24 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
   </header>
   <section class="page" x-show="authed && view === 'threads'">
     <p class="status-line" x-show="threads.loaded && !threads.on">后台帮忙关着。去 设置 → 后台帮忙 打开，它才会把活交给线程。</p>
+    <template x-if="waiting.items.length">
+      <div class="list" aria-label="等你的和新消息">
+        <p class="group-title">等你 <span x-text="waiting.open || ''"></span></p>
+        <template x-for="item in waiting.items" :key="item.id">
+          <div class="trow" :class="{ ask: item.kind === 'ask' && !item.expired }" style="opacity: 1" :style="item.expired && 'opacity: .55'">
+            <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="{ hot: item.kind === 'ask' && !item.expired, bad: item.kind === 'stuck', ok: item.kind === 'done' }" x-text="waitingKind(item)"></span></span>
+            <span class="sub"><span x-text="item.line"></span><span x-text="fmt(item.at)"></span></span>
+            <span class="links">
+              <template x-for="(option, i) in item.options" :key="option">
+                <button class="btn small" :class="i === 0 && 'primary'" type="button" :disabled="Boolean(choosing)" @click="waitingAnswer(item, option)" x-text="option"></button>
+              </template>
+              <button class="btn small" type="button" @click="waitingOpen(item)">打开线程</button>
+              <button class="icon-btn sm" type="button" x-show="item.kind !== 'ask'" @click="waitingRead(item)" title="已读" aria-label="已读"><i class="i i-x" aria-hidden="true"></i></button>
+            </span>
+          </div>
+        </template>
+      </div>
+    </template>
     <template x-for="item in threadsIn('open')" :key="item.id">
       <button class="trow" :class="{ working: item.status === 'sent' || item.status === 'working', ask: item.waiting }" type="button" @click="openThread(item.id)" title="打开线程">
         <span class="top-line"><span class="t" x-text="item.title"></span><span class="pill" :class="taskPill(stateOf(item))" x-text="taskStatusText(stateOf(item), item.runs)"></span></span>
@@ -771,6 +790,9 @@ window.telegramReady = /(?:^#|[&#])tgWebAppData=/.test(location.hash) ? new Prom
           <button class="icon-btn sm" type="button" @click="saveFile(file)" title="下载" aria-label="下载"><i class="i i-download" aria-hidden="true"></i></button>
         </div>
       </template>
+    </div>
+    <div class="links" x-show="thread.runs === 'machine' && thread.status === 'working'">
+      <button class="btn small" type="button" :disabled="threadBusy" @click="stopThread()">叫它停下</button>
     </div>
     <div class="thread-say" x-show="thread.canSay">
       <textarea x-model="threadDraft" rows="2" placeholder="直接跟它说，不经过住户" aria-label="跟线程说"></textarea>
