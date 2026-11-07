@@ -460,7 +460,6 @@ input.secret { -webkit-text-security: disc; font-family: var(--mono); }
 .roles .role-edit input, .roles .role-edit select, .roles .role-edit textarea { width: 100%; height: 42px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--input-bg); outline: 0; font-size: 15px; }
 .roles .role-edit textarea { height: auto; padding: 10px 12px; line-height: 1.5; resize: vertical; }
 .roles .role-edit :focus { border-color: var(--accent); }
-.copy-box { width: 100%; height: 150px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--input-bg); color: var(--text-2); font: 12px/1.5 var(--mono); resize: vertical; outline: 0; }
 .mini-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 14px; background: var(--input-bg); border: 1px solid var(--line-soft); }
 .mini-row .top-line { display: flex; align-items: center; gap: 8px; }
 .mini-row .t { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }

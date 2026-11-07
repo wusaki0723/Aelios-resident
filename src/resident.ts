@@ -47,7 +47,6 @@ import { EffectiveHistoryError, installEffectiveHistory } from "./effective-hist
 import { historyPathComplete } from "./history-path";
 import { readAuxiliaryAnswer, removeAuxiliaryTurn } from "./letter-auxiliary";
 import { fakeModel } from "./fake-model";
-import { DesktopDeviceStore, desktopReply } from "./desktop-devices";
 import { TaskWorker, handedPath, type ThreadFile, type ThreadLine } from "./task-worker";
 import { ALARM_PREFIX, CHAT_RULES, DEFAULT_PERSONA, HEARTBEATS, MAX_HEARTBEATS, LETTER_PREFIX, SKIP, checkinPrompt, heartbeatPrompt, isCheckin, isNote, letterPrompt, stamp } from "./prompts";
 import { inQuietHours, quietHoursInWords, quietHoursOf } from "./quiet-hours";
@@ -125,19 +124,16 @@ import {
   TASKS_PER_DAY,
   TASKS_PER_TURN,
   TaskStore,
-  fire,
   localBrief,
   parseProgress,
   parseResult,
   payload,
   quietNote,
   resultNote,
-  routinePrompt,
   TASK_DESCRIPTION,
   taskOfNote,
   carriesOnUnasked,
   threadName,
-  isFireUrl,
   type NewTask,
   type Task,
   type TaskCard,
@@ -665,11 +661,6 @@ export class Resident extends Think<Env> {
       }
     } catch (error) {
       console.error("startup: alarm restoration failed; durable alarms retained for retry", kind(error));
-    }
-    try {
-      await this.armDesktopReports();
-    } catch (error) {
-      console.error("startup: desktop report recovery failed; durable reports retained", kind(error));
     }
     // Not waited for: the first request should not wait on Telegram.
     this.ctx.waitUntil(this.repairMenuButton().catch((error) => console.error("startup: menu button check failed", kind(error))));
@@ -1383,56 +1374,6 @@ export class Resident extends Think<Env> {
   // ---- the resident's threads, its hands (cloud-tasks.ts, task-worker.ts) ----
 
   #taskStore: TaskStore | null = null;
-  #desktopStore: DesktopDeviceStore | null = null;
-  #desktopDrain: Promise<void> | null = null;
-
-  private desktopDevices(): DesktopDeviceStore {
-    this.#desktopStore ??= new DesktopDeviceStore(this.sql.bind(this) as Sql, this.cloudTasks(), operation => this.ctx.storage.transactionSync(operation));
-    return this.#desktopStore;
-  }
-
-  webDesktop() { return this.desktopDevices().list(); }
-  webDesktopRegister(input: unknown) { return desktopReply(() => this.desktopDevices().register(input)); }
-  async webDesktopRevoke(input: unknown) {
-    const result = await desktopReply(() => this.desktopDevices().revoke(input));
-    await this.armDesktopReports();
-    return result;
-  }
-  async desktopDeviceRequest(token: string, action: "heartbeat" | "claim" | "events", input: unknown) {
-    const result = await desktopReply(() => this.desktopDevices().request(token, action, input, this.cloudTasksOn()));
-    await this.armDesktopReports();
-    return result;
-  }
-
-  private async armDesktopReports(): Promise<void> {
-    if (!this.desktopDevices().pendingReports().length) return;
-    try { await this.schedule(1, "drainDesktopReports", {}, { idempotent: true }); }
-    catch (error) { console.error("desktop: report scheduling failed; durable report retained", { error: error instanceof Error ? error.name : typeof error }); }
-  }
-
-  /** The inbox transaction saved each terminal result and outbox row before its event was acknowledged. */
-  async drainDesktopReports(): Promise<void> {
-    if (this.#desktopDrain) return this.#desktopDrain;
-    const run = async () => {
-      const devices = this.desktopDevices();
-      for (const jobId of devices.pendingReports()) {
-        const task = this.cloudTasks().get(jobId);
-        if (!task) continue;
-        const id = `desktop_result_${jobId}`;
-        const message = { id, role: "user", parts: [{ type: "text", text: resultNote(task) }], metadata: { at: task.updatedAt } } as UIMessage;
-        // Stable across RPC retries, outbox retries and isolate restarts, unlike a wall-clock message ID.
-        await this.submitMessages([message], { idempotencyKey: id });
-        devices.reportDelivered(jobId);
-      }
-    };
-    this.#desktopDrain = run().finally(() => { this.#desktopDrain = null; });
-    try { await this.#desktopDrain; }
-    catch (error) {
-      await this.schedule(30, "drainDesktopReports", {}, { idempotent: true });
-      throw error;
-    }
-  }
-
   // Tasks each running turn has sent.
   #turnTasks = new Map<string, number>();
 
@@ -1459,17 +1400,9 @@ export class Resident extends Think<Env> {
     return { roles: this.taskRoles().list() };
   }
 
-  // Off unless they turn it on. Threads here need nothing more; a trigger adds GitHub Actions or claude.ai.
+  // Off unless they turn it on. Threads here need nothing more; a GitHub token adds GitHub Actions.
   private cloudTasksOn(): boolean {
     return this.cfg.CLOUD_TASKS?.trim().toLowerCase() === "on";
-  }
-
-  /** The claude.ai trigger they filled in, when it is filled in right. */
-  private taskTrigger(): { url: string; token: string } | null {
-    if (!this.cloudTasksOn()) return null;
-    const url = this.cfg.CLOUD_TASK_URL?.trim() ?? "";
-    const token = this.cfg.CLOUD_TASK_TOKEN?.trim() ?? "";
-    return isFireUrl(url) && token ? { url, token } : null;
   }
 
   /** Their GitHub token, for the hands on GitHub Actions (hands-repo.ts); "" without one. */
@@ -1479,18 +1412,13 @@ export class Resident extends Think<Env> {
 
   /** Where jobs can run besides the resident's own threads. */
   private taskRoutes(): TaskRoutes {
-    return { linux: Boolean(this.githubToken()), external: Boolean(this.taskTrigger()), desktop: this.cloudTasksOn() && Boolean(this.desktopDevices().active()) };
+    return { linux: Boolean(this.githubToken()) };
   }
 
-  /**
-   * How it stands, for the settings page and /status. A claude.ai trigger filled in wrong is "incomplete": jobs
-   * still go to the threads here, and to GitHub Actions if that is set up.
-   */
-  private taskMode(): "off" | "local" | "linux" | "external" | "all" | "incomplete" {
+  /** How it stands, for the settings page and /status. */
+  private taskMode(): "off" | "local" | "linux" {
     if (!this.cloudTasksOn()) return "off";
-    const { linux, external } = this.taskRoutes();
-    if (!external && this.cfg.CLOUD_TASK_URL?.trim()) return "incomplete";
-    return linux && external ? "all" : linux ? "linux" : external ? "external" : "local";
+    return this.taskRoutes().linux ? "linux" : "local";
   }
 
   private quietMinutes(): number {
@@ -1536,7 +1464,7 @@ export class Resident extends Think<Env> {
           title: z.string().describe("A few words in their language, for the task's card."),
           job: z.string().describe("The whole job, for a thread that knows nothing else."),
           repo: z.string().optional().describe("owner/name of the GitHub repository to work in, if there is one."),
-          execution: z.enum(["local", "external", "linux", "desktop"]).optional().describe("Where it runs, from the description. desktop is their paired computer and never falls back to cloud. Leave it out for the usual place."),
+          execution: z.enum(["local", "linux"]).optional().describe("Where it runs, from the description. Leave it out for the usual place."),
           follow_up_of: z.string().optional().describe("The id (t_…) of an earlier task or thread this one continues; find finds it."),
           role: z.string().optional().describe("A role from their settings page (coder, reviewer, researcher, or one they added): its instructions go before your job and its threads use its model, so write only what this job needs. A follow-up keeps its thread's role.")
         }),
@@ -1591,17 +1519,9 @@ export class Resident extends Think<Env> {
     };
   }
 
-  /**
-   * The place a job asked for in cloud_task goes to: a place with a shell that is not set up gives way to the other
-   * one that is; otherwise the place, or what is set up.
-   */
+  /** The place a job asked for in cloud_task goes to: local, or linux when it is set up. */
   private placeFor(asked: TaskExecution | undefined): TaskExecution | undefined | { error: string } {
-    if (!asked || asked === "local") return asked;
-    const routes = this.taskRoutes();
-    if (asked === "desktop") return routes.desktop ? "desktop" : { error: "Not sent: no paired desktop device. A desktop job is never moved to a cloud executor." };
-    if (routes[asked]) return asked;
-    const other = asked === "linux" ? "external" : "linux";
-    if (routes[other]) return other;
+    if (!asked || asked === "local" || this.taskRoutes()[asked]) return asked;
     return { error: `Not sent: ${asked} is not set up on their settings page; only local is. Send it to local if a thread without a shell can do it, or tell them.` };
   }
 
@@ -1647,30 +1567,17 @@ export class Resident extends Think<Env> {
     return { task: task.id, title: task.title, runs: task.runs, session_url: task.sessionUrl, note: "Sent. Its result comes back to you later as a note." };
   }
 
-  /** Adds a task and either starts it on a thread here or fires the trigger; sets a quiet check too. */
+  /** Adds a task and either starts it on a thread here or on GitHub Actions; sets a quiet check too. */
   private async startTask(input: NewTask, follows: Task | null): Promise<Task | { error: string }> {
     if (!this.cloudTasksOn()) return { error: "后台帮忙关着" };
-    const trigger = this.taskTrigger();
     const routes = this.taskRoutes();
-    if (follows?.runs === "desktop" && input.execution && input.execution !== "desktop") return { error: "本机线程不能悄悄改派到云端；请明确新建另一任务" };
     // A follow-up stays where its thread ran, while that is still set up.
-    const stays = follows && (follows.runs === "local" || follows.runs === "desktop" || routes[follows.runs]) ? follows.runs : null;
-    const execution: TaskExecution = input.execution ?? stays ?? (routes.external ? "external" : "local");
+    const stays = follows && (follows.runs === "local" || routes[follows.runs]) ? follows.runs : null;
+    const execution: TaskExecution = input.execution ?? stays ?? "local";
     if (execution === "linux" && !routes.linux) return { error: "还没接 GitHub Actions：设置页里填一个 GitHub token" };
-    if (execution === "external" && !routes.external) return { error: "还没接 claude.ai 定时任务：设置页里填它的触发网址和 token" };
     const store = this.cloudTasks();
     const added = store.add({ ...input, execution });
     if ("error" in added) return added;
-    if (execution === "desktop") {
-      const enqueued = await desktopReply(() => this.desktopDevices().enqueue(added.task, follows));
-      if (enqueued.status !== 200) {
-        store.drop(added.task.id);
-        return { error: (enqueued.body as { error: string }).error };
-      }
-      await this.schedule(5 * 60, "taskQuiet", { id: added.task.id });
-      await this.pruneTasks();
-      return store.get(added.task.id)!;
-    }
     if (execution === "local") {
       store.sent(added.task.id, "");
       try {
@@ -1684,7 +1591,7 @@ export class Resident extends Think<Env> {
       return store.get(added.task.id) ?? added.task;
     }
     const job = payload(added.task, added.code, follows);
-    const fired = execution === "linux" ? await this.fireHands(job) : await fire(trigger!.url, trigger!.token, job, this.env.CLOUD_TASK_API_BASE);
+    const fired = await this.fireHands(job);
     if ("error" in fired) {
       store.drop(added.task.id);
       return fired;
@@ -1957,14 +1864,6 @@ export class Resident extends Think<Env> {
   async taskQuiet(payload: { id: string }): Promise<void> {
     const store = this.cloudTasks();
     const pending = store.get(payload.id);
-    if (pending?.runs === "desktop") {
-      const state = this.desktopDevices().quiet(pending.id);
-      if (["queued", "claimed", "running"].includes(state)) await this.schedule(5 * 60, "taskQuiet", { id: pending.id });
-      // Lost touch with their computer: told once, as the checks stop here.
-      else if (state === "unknown") await this.tellAboutTask(pending, (task) => quietNote(task, ""));
-      await this.armDesktopReports();
-      return;
-    }
     if (pending?.runs === "local" && (pending.status === "sent" || pending.status === "working")) {
       const code = store.codeOf(pending.id) ?? "";
       const report = this.dynamicAgents.has(TaskWorker, threadName(pending.root))
@@ -2017,9 +1916,8 @@ export class Resident extends Think<Env> {
   async webTasks(origin?: string): Promise<{
     on: boolean;
     configured: boolean;
-    mode: "off" | "local" | "linux" | "external" | "all" | "incomplete";
+    mode: "off" | "local" | "linux";
     origin: string;
-    prompt: string;
     github: { on: boolean; repo: string; url: string; problem: string; tokenPage: string };
     today: number;
     limit: number;
@@ -2037,11 +1935,10 @@ export class Resident extends Think<Env> {
     const problem = token && !current ? ((await this.ctx.storage.get<string>("hands_problem")) ?? "") : "";
     return {
       on: this.cloudTasksOn(),
-      configured: mode !== "off" && mode !== "incomplete",
+      configured: mode !== "off",
       mode,
       github: { on: Boolean(token), repo: current ? `${current.owner}/${current.repo}` : "", url: current?.url ?? "", problem, tokenPage: TOKEN_PAGE },
       origin: own,
-      prompt: own ? routinePrompt(own) : "",
       today: this.cloudTasks().sentToday(),
       limit: TASKS_PER_DAY,
       tasks: this.cloudTasks().recent(10).map((task) => this.cloudTasks().card(task)),
@@ -2053,14 +1950,14 @@ export class Resident extends Think<Env> {
     };
   }
 
-  /** The settings page's 试一下: a small task that only reports back, on the trigger if there is one. */
+  /** The settings page's 试一下: a small task that only reports back, on GitHub Actions if that is set up. */
   async webTestTask(origin: string, place?: TaskExecution): Promise<Awaited<ReturnType<Resident["webTasks"]>> | { error: string }> {
     await this.noteOrigin(origin);
     if (this.cloudTasks().sentToday() >= TASKS_PER_DAY) return { error: `24 小时内已经派了 ${TASKS_PER_DAY} 单，明天再试` };
     const job =
-      'This is a test from the resident\'s settings page, to see that this scheduled task starts and can report back. Do nothing else: send the progress line "收到了", then report the result with status done and the summary "接通了".';
+      'This is a test from the resident\'s settings page, to see that a thread starts and can report back. Do nothing else: send the progress line "收到了", then report the result with status done and the summary "接通了".';
     const routes = this.taskRoutes();
-    const execution: TaskExecution = place ?? (routes.external ? "external" : routes.linux ? "linux" : "local");
+    const execution: TaskExecution = place ?? (routes.linux ? "linux" : "local");
     const task = await this.startTask({ title: "接通测试", job, test: true, execution }, null);
     return "error" in task ? task : this.webTasks();
   }
@@ -3583,11 +3480,8 @@ export class Resident extends Think<Env> {
       `后台帮忙：${
         {
           off: "关",
-          incomplete: `开了，自己的线程能干${this.taskRoutes().linux ? "，要跑命令的交给 GitHub Actions" : ""}；claude.ai 的触发网址或 token 没填对`,
           local: "开，交给自己的线程",
-          linux: "开，交给自己的线程，要跑命令的交给 GitHub Actions",
-          external: "开，默认交给 claude.ai 的云端 Claude Code，轻活交给自己的线程",
-          all: "开，默认交给 claude.ai 的云端 Claude Code，轻活交给自己的线程，也能交给 GitHub Actions"
+          linux: "开，交给自己的线程，要跑命令的交给 GitHub Actions"
         }[this.taskMode()]
       }${this.cloudTasksOn() ? `；24 小时内派了 ${this.cloudTasks().sentToday()} 单，在干的 ${this.cloudTasks().open()} 单` : ""}`,
       `别的 MCP：${

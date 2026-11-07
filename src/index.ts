@@ -31,7 +31,6 @@ import { callerAllowed, issueSession, miniAppCaller, triesMiniApp } from "./mini
 import { MCP_CALLBACK_PATH } from "./mcp-servers";
 import { MAX_ZIP_BYTES } from "./stickers";
 import { REPORT_MAX_BYTES } from "./cloud-tasks";
-import { desktopReply, readDesktopJson } from "./desktop-devices";
 import { THREAD_FILE_MAX } from "./task-worker";
 import { TELEGRAM_WEBHOOK_PATH, commandOf, isAllowed, timingSafeEqual, type TelegramUpdate } from "./telegram";
 import { DEFAULT_RESIDENT, RESIDENTS_MAX, residentOfPath, residentPrefix } from "./residents";
@@ -251,35 +250,7 @@ async function handleGroup(request: Request, env: Env, url: URL): Promise<Respon
   return new Response("not found", { status: 404 });
 }
 
-const desktopJson = (result: { status: number; body: unknown }) => Response.json(result.body, {
-  status: result.status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" }
-});
-
-/** Web-key administration and device bearer execution deliberately use separate entry points. */
-async function handleDesktopWeb(request: Request, env: Env, url: URL, at: At): Promise<Response> {
-  if (!webAllowed(env, request)) return desktopJson({ status: 403, body: { error: "设备管理需要网页钥匙" } });
-  const agent = await residentOf(env, at);
-  if (request.method === "GET" && url.pathname === "/web/desktop") return desktopJson({ status: 200, body: await agent.webDesktop() });
-  if (request.method !== "POST") return desktopJson({ status: 405, body: { error: "method not allowed" } });
-  if (!["/web/desktop/register", "/web/desktop/revoke"].includes(url.pathname)) return desktopJson({ status: 404, body: { error: "not found" } });
-  const parsed = await desktopReply(() => readDesktopJson(request));
-  if (parsed.status !== 200) return desktopJson(parsed);
-  return desktopJson(url.pathname.endsWith("/register") ? await agent.webDesktopRegister(parsed.body) : await agent.webDesktopRevoke(parsed.body));
-}
-
-async function handleDesktopDevice(request: Request, env: Env, url: URL, at: At): Promise<Response> {
-  const action = url.pathname.slice("/desktop/v1/".length);
-  if (!["heartbeat", "claim", "events"].includes(action)) return desktopJson({ status: 404, body: { error: "not found" } });
-  if (request.method !== "POST") return desktopJson({ status: 405, body: { error: "method not allowed" } });
-  const bearer = /^Bearer (rd_[0-9a-f]{64})$/.exec(request.headers.get("authorization") ?? "");
-  if (!bearer) return desktopJson({ status: 401, body: { error: "设备认证失效", code: "UNAUTHORIZED" } });
-  const parsed = await desktopReply(() => readDesktopJson(request));
-  if (parsed.status !== 200) return desktopJson(parsed);
-  return desktopJson(await (await residentOf(env, at)).desktopDeviceRequest(bearer[1], action as "heartbeat" | "claim" | "events", parsed.body));
-}
-
 async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<Response> {
-  if (url.pathname === "/web/desktop" || url.pathname.startsWith("/web/desktop/")) return handleDesktopWeb(request, env, url, at);
   const who = await webCaller(env, request, at);
   if (!who) return new Response("unauthorized", { status: 401 });
   if (url.pathname === "/web/residents" || url.pathname === "/web/residents/remove") return handleResidents(request, env, url, who);
@@ -521,7 +492,7 @@ async function handleWeb(request: Request, env: Env, url: URL, at: At): Promise<
     case "GET /web/tasks":
       return Response.json(await agent.webTasks(at.base));
     case "POST /web/tasks/test": {
-      const place = body.execution === "linux" || body.execution === "external" || body.execution === "local" || body.execution === "desktop" ? body.execution : undefined;
+      const place = body.execution === "linux" || body.execution === "local" ? body.execution : undefined;
       const tried = await agent.webTestTask(at.base, place);
       return Response.json(tried, { status: "error" in tried ? 400 : 200 });
     }
@@ -588,7 +559,6 @@ export default {
       if (url.pathname === TELEGRAM_WEBHOOK_PATH) return await handleWebhook(request, env, ctx, url, at);
       if (url.pathname === WECOM_PATH) return await handleWecom(request, env, url, at);
       if (url.pathname === "/tg/setup") return await handleSetup(request, env, url, at);
-      if (url.pathname.startsWith("/desktop/v1/")) return await handleDesktopDevice(request, env, url, at);
       if (url.pathname.startsWith("/web/")) return await handleWeb(request, env, url, at);
       if (url.pathname === "/manifest.webmanifest" && request.method === "GET" && id === AGENT_NAME) return await manifest(env);
       const avatar = url.pathname.match(/^\/avatar\/([0-9a-f]{32})$/);

@@ -60,11 +60,8 @@ interface Env {
   VOICE_REPLY?: string;
   // Sends voice requests straight there instead of through AI Gateway (a proxy; the local tests).
   VOICE_BASE_URL?: string;
-  // Background help (cloud-tasks.ts): on or off; a claude.ai scheduled task's API trigger, its address and token;
-  // a GitHub token for GitHub Actions (hands-repo.ts).
+  // Background help (cloud-tasks.ts): on or off; a GitHub token for GitHub Actions (hands-repo.ts).
   CLOUD_TASKS?: string;
-  CLOUD_TASK_URL?: string;
-  CLOUD_TASK_TOKEN?: string;
   CLOUD_TASK_GITHUB_TOKEN?: string;
   // The threads' model, here and on GitHub Actions; empty uses Workers AI's glm-4.7-flash.
   CLOUD_TASK_MODEL?: string;

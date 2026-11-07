@@ -223,7 +223,7 @@ One Worker can house several residents, each with its own persona, model, settin
 - **The first resident** stays exactly as it was: same address, settings and bot. If you never make another, nothing changes.
 - **A new resident's addresses** are under `/r/<id>`: its web page is `/?r=<id>`, and its Telegram webhook, WeCom message URL, thread reports and MCP sign-ins all carry that part. The resident fills them in itself.
 - **Memory**: it shares the first resident's Aelios address and key, speaks as the Aelios identity named after its id (`/<id>/`) and keeps its memories in that identity's space. Create the identity in Aelios' admin page and give it its main models; change the identity on its settings page under Long-term memory. The key must be Aelios' main key, `CHATBOX_API_KEY`: the other keys read and write only the default space, where two residents' memories would mix.
-- **Settings it never takes from Cloudflare**: the Telegram bot token, the WeCom app (AgentId, Secret, Token, EncodingAESKey), the claude.ai scheduled task's trigger URL and token, the Aelios identity and space, its name, and check-ins and heartbeats (a new resident does not reach out until you turn it on). The Cloudflare variables for these are the first resident's only. Everything else (providers, the Claude box, search, voice, the GitHub token, the time zone, who may talk to it) follows Cloudflare until set on its page.
+- **Settings it never takes from Cloudflare**: the Telegram bot token, the WeCom app (AgentId, Secret, Token, EncodingAESKey), the Aelios identity and space, its name, and check-ins and heartbeats (a new resident does not reach out until you turn it on). The Cloudflare variables for these are the first resident's only. Everything else (providers, the Claude box, search, voice, the GitHub token, the time zone, who may talk to it) follows Cloudflare until set on its page.
 - **Its own bot**: make another bot with @BotFather and paste its token on the new resident's settings page under Chat channels → Telegram. It connects the bot to `/r/<id>` itself, and the bot's menu button opens the Mini App on it. For WeCom, make another app and use the message URL shown on its settings page.
 - **Notifications**: the whole web door has one key pair and one list of devices, so a device that turned notifications on once, on any resident's page, gets every resident's, and tapping one opens that resident. Turning them off on one page turns them off for all.
 - **Deleting one**: open its page (tap its avatar), then **Delete this resident** (「删除这个住户」) at the bottom, and type its id to confirm. Its conversation, settings, stickers and alarms are deleted and its bot is let go; its memories in Aelios stay. It is off the list at once, but its id stays taken until everything is wiped; if wiping fails, it is tried again a few minutes later. The first resident cannot be deleted. Up to 8 more besides the first.
@@ -449,14 +449,10 @@ Enter a server's address (https) under **Other tools** (「别的工具（MCP）
 
 Off by default. Once turned on under **Background help** (「后台帮忙」), when you ask it to dig through lots of material, write something, make a page or change code, it writes the work up as a job and hands it to a **thread**, and keeps chatting with you. None of the intermediate steps use the chat's context or break its cache. When the thread is done, the resident tells you in its own words.
 
-A thread can run in three places:
+A thread can run in two places:
 
 - **On the resident itself** (nothing else to set up, no Claude subscription needed): each thread has its own conversation and files. It can search the web, read pages, use long-term memory, the notebook, connected MCP tools, and read and write its own files. It has no shell, so it cannot install or run anything.
 - **GitHub Actions** (for running commands, tests and opening pull requests): a full Linux machine, in a private repository the resident makes on your GitHub account. All it takes is one token.
-- **A claude.ai routine** (with a Claude subscription): each job opens a cloud Claude Code session on your plan. Once connected, jobs go there by default; light reading and writing can still stay on the resident's own threads.
-
-A fourth place, **your own computer**, is in development: through the DSH desktop app and its plugin ([source](https://github.com/Aelios-project/dsh-plugin-aelios-resident), not on npm yet), a job goes to a helper in one folder you choose, and only when you ask for work on that computer. You grant it on that computer: read-only, or full access to edit files and run commands. How it works and its limits: [docs/dsh-desktop.md](docs/dsh-desktop.md) (in Chinese).
-
 Threads on the resident and on GitHub Actions work on **the threads' model**: Workers AI's `@cf/zai-org/glm-4.7-flash` (within its daily free allowance) unless you pick another under 「线程用哪个模型」 (`CLOUD_TASK_MODEL`). They never use the chat's model on their own, so a costly chat model is not spent on legwork.
 
 The **Threads** (「线程」) button at the top of the chat (also on its page) lists every thread. Open one to see:
@@ -472,7 +468,7 @@ You do not have to keep track of threads yourself. Bring up earlier work in your
 - **Reading a thread's file**: a text file a thread on the resident made, up to 16,000 characters. Like a web page, it is read as information, and no job goes out in a reply after it.
 - **Searching the chat**: your conversation, the part a handoff letter folded away included, searched for exact words the same way the magnifier does, and the messages around a hit.
 
-**Roles** save the resident writing the same instructions into every job. Three come with it, under background help on the settings page: `coder` (follows the repository's own rules on a new branch; for a bug, finds the root cause and writes a test that fails first, and stops after three failed tries; runs typecheck and tests itself before it says it is done, then opens a PR; never merges, pushes to the default branch or deploys), `reviewer` (reads only, runs the tests, reports only what it is fairly sure of and leaves out old problems, what a linter would catch and taste; sorts it into must fix, should fix and nits with file, line, why it matters and how to fix, and ends with whether it can be merged) and `researcher` (plans first, prefers first-hand sources and says when it leans on weaker ones, writes down where sources disagree, gives a source for each point and marks what it is unsure of). They draw on well-tried agent skills ([superpowers](https://github.com/obra/superpowers)' debugging, test-first and verify-before-done; Anthropic's code-review plugin and research subagent), kept short. A role you never changed gets the new wording when the resident updates; one you changed stays yours. You can change them, remove them and add your own, and pick each one's model from a list: threads on the resident and on GitHub Actions use the role's model (on claude.ai your subscription's model does the work). The resident names a role in `cloud_task` (its `role`, not another tool); the role's instructions go before the job, and a follow-up keeps its thread's role.
+**Roles** save the resident writing the same instructions into every job. Three come with it, under background help on the settings page: `coder` (follows the repository's own rules on a new branch; for a bug, finds the root cause and writes a test that fails first, and stops after three failed tries; runs typecheck and tests itself before it says it is done, then opens a PR; never merges, pushes to the default branch or deploys), `reviewer` (reads only, runs the tests, reports only what it is fairly sure of and leaves out old problems, what a linter would catch and taste; sorts it into must fix, should fix and nits with file, line, why it matters and how to fix, and ends with whether it can be merged) and `researcher` (plans first, prefers first-hand sources and says when it leans on weaker ones, writes down where sources disagree, gives a source for each point and marks what it is unsure of). They draw on well-tried agent skills ([superpowers](https://github.com/obra/superpowers)' debugging, test-first and verify-before-done; Anthropic's code-review plugin and research subagent), kept short. A role you never changed gets the new wording when the resident updates; one you changed stays yours. You can change them, remove them and add your own, and pick each one's model from a list: threads on the resident and on GitHub Actions use the role's model. The resident names a role in `cloud_task` (its `role`, not another tool); the role's instructions go before the job, and a follow-up keeps its thread's role.
 
 It can also hand you a file instead of a long text you would have to copy on a phone: a plan, a document, a list, a table. That is one more tool, `make_file` (at most 3 files a reply). The file goes to the chat you wrote from (a document on Telegram, a file on WeCom) and shows under the reply on the web page, where you can open and download it. Files are kept with the voice messages and go when those do, the oldest first.
 
@@ -486,27 +482,20 @@ Connecting GitHub Actions:
 
 Nothing is stored on GitHub: each run fetches `hands.mjs` from the resident, calls the model through the resident (the threads' model, with the resident's own keys; the calls show in the usage timeline as the threads' work), and borrows the token for that run to clone, push and open pull requests in your other repositories. Keep `resident-hands` private: a run's log and files can be seen by whoever can see the repository, and the resident will not use it once it is public. Each job gets a fresh machine; the job is read from the run's event file, not printed in the log, and the codes show as `***`. Files it makes come back to the resident: they show on the thread's report and in its file list on the web page, to open or download (up to 10 MB each, 50 MB a job; a bigger one stays in that run's artifact for 30 days). To publish pages publicly, add the Actions variable `HANDS_PUBLISH_REPO` (`owner/repo`) in `resident-hands` and turn on GitHub Pages in that repository (Deploy from a branch → gh-pages → / (root)); it publishes only when the job asks for a public page. A model call that times out or gets a server error (5xx) is tried once more before the job is marked failed. A run that times out or crashes tells the resident it stopped, so you do not wait 3 hours for nothing.
 
-The first time you connect a claude.ai routine (the settings page shows the same steps and the prompt to copy under 「怎么接」):
-
-1. Open [claude.ai/code/routines](https://claude.ai/code/routines), create a routine, paste in the prompt from the settings page, and choose the model, repository and cloud environment.
-2. Under the trigger, add an API trigger, copy its URL and click "Generate token". Enter the URL on the settings page; enter the token there too, or store it as the Cloudflare secret `CLOUD_TASK_TOKEN`. The token is shown only once; don't send it in the chat.
-3. In the cloud environment that routine uses, set network access to Custom and add the resident's domain (such as `xxx.workers.dev`) to the allowed sites; otherwise results cannot come back.
-4. Click **Try it** (「试一下」). When the job turns 「做完了」 (done) a few minutes later, it is connected.
-
 Wherever it runs:
 
-- Under the reply that sent a job there is a small card (sent, working, done, waiting for you, failed, no reply). **Open thread** (「打开线程」) shows the details; jobs on GitHub or claude.ai also have **Open session** (「打开会话」), and a claude.ai session can be continued there, with a new result reported back again.
-- A job that needs a shell goes to GitHub Actions or claude.ai, whichever is connected (with both, the resident picks). Connecting or disconnecting either one does not change what the chat's model is told about background help, so it does not rewrite the chat's cache.
+- Under the reply that sent a job there is a small card (sent, working, done, waiting for you, failed, no reply). **Open thread** (「打开线程」) shows the details; jobs on GitHub also have **Open session** (「打开会话」).
+- A job that needs a shell goes to GitHub Actions when it is connected. Connecting or disconnecting it does not change what the chat's model is told about background help, so it does not rewrite the chat's cache.
 - A job contains only the work itself, not the conversation or anything private. The thread starts out knowing nothing, so the resident writes the job out in full.
 - Jobs are sent only in a turn you started yourself; not if that turn has read a web page, searched the web, opened a thread's file or called another MCP server. At most 3 jobs per reply and 10 per 24 hours.
 - One exception, for work you already asked for: when a thread reports back done or failed, the resident may carry that same thread on right away (to fix or finish it) without waiting for you, at most twice in a row. Nothing new goes out from a report, and once it has carried on twice, the thread waits for you.
 - A report that comes back while the resident is answering you is kept and waits until that reply is done; it is told once.
 - Results that come back are treated as information, not as instructions. Each job has its own one-time code; nothing without it is accepted, and it expires after 7 days.
-- On GitHub and claude.ai it works on a new branch and opens a PR, and never pushes to the default branch, deletes anything or spends money unless the job says so.
+- On GitHub it works on a new branch and opens a PR, and never pushes to the default branch, deletes anything or spends money unless the job says so.
 - Only the newest 200 jobs are kept; a thread on the resident whose jobs are all gone is deleted with its files. Until then its files stay, with no time limit, in the resident's Durable Object storage on your Cloudflare account, and count toward its SQLite storage (5 GB in all on the free plan; on the paid plan 5 GB-month included, then $0.20 a GB-month). A thread that ran on GitHub Actions or claude.ai keeps its files there; the resident keeps only its report and links.
 - If no result comes back within 3 hours (longer for a job that keeps reporting progress, up to 12 hours), it tells you, with the link.
 
-On GitHub and claude.ai, a follow-up starts afresh with the earlier result as context. The Anthropic trigger API is still in preview and has hourly trigger limits.
+On GitHub, a follow-up starts afresh with the earlier result as context.
 
 ### Providers: your own keys and relays
 
@@ -571,8 +560,6 @@ Everything is changed on the settings page, except `WEB_KEY` (a Cloudflare secre
 | `VOICE_BASE_URL` | empty | Usually left empty; when set, voice requests go straight to this address instead of through AI Gateway |
 | `CLOUD_TASKS` | `off` | `on` turns on background help: jobs go to threads |
 | `CLOUD_TASK_GITHUB_TOKEN` | empty | Optional GitHub token (`repo` and `workflow`): the resident sets up a private repository and runs jobs there on GitHub Actions; can be stored as a Cloudflare secret |
-| `CLOUD_TASK_URL` | empty | Optional claude.ai routine trigger URL |
-| `CLOUD_TASK_TOKEN` | empty | That trigger's token (when `CLOUD_TASK_URL` is set); can be stored as a Cloudflare secret |
 | `CLOUD_TASK_MODEL` | empty | The threads' model, on the resident and on GitHub Actions, as the model picker names it; empty uses Workers AI's `@cf/zai-org/glm-4.7-flash` |
 | `AI_GATEWAY_ID` | empty (`default`) | Which AI Gateway search, voice and, without Aelios, the models go through |
 | `CUSTOM_BASE_URL` / `CUSTOM_API_KEY` | empty | The relay's address (up to `/v1`) and key; used for `custom/…` models |
@@ -630,8 +617,8 @@ Check that both conditions hold: the chat it carries has reached the token thres
 **A letter failed, or did not reach Aelios**
 Under **Thinking & letters**, check the writing status and the Aelios delivery status separately. A failed letter leaves the older chat in place, which is not the same as having nothing to fold; `/handoff` tells you whether it failed, had nothing to fold, or found a letter already being recovered. If the letter was written and only sending failed, click **Retry sync** — no need to write another. For paused letters, first check whether the Aelios settings were removed or the address or memory space changed; restore the original target, then retry. Old letters are never redirected to a new target.
 
-**A cloud job stays at "no reply"**
-Most likely the routine's cloud environment does not let the session reach the resident: set network access to Custom and add the resident's domain to the allowed sites. **Open session** on the card shows where it got stuck. If the resident's domain changed (for example, you added your own domain), the prompt on the settings page changes with it and must be pasted into the routine again.
+**A GitHub Actions job stays at "no reply"**
+Most likely the GitHub Actions run could not reach the resident, or it stopped. **Open session** on the card shows where it got stuck.
 
 ## Development
 

@@ -127,11 +127,13 @@ function decide(options: LanguageModelV4CallOptions): { text: string; delayMs?: 
   if (said.includes("标记完再画") && last?.role !== "tool") return { text: "先发这张 [sticker: test/wave]\n\n", tool: "make_sticker", input: HEART, delayMs: 1500 };
   // A voice message sent with send_voice, and nothing written after it.
   if (said.includes("发条语音") && last?.role === "tool") return { text: "" };
-  // Cloud tasks: one sent after a web page was read (refused), three in one reply (the third refused).
+  // Cloud tasks: one sent after a web page was read (refused), three in one reply (the third refused). Left to
+  // itself a job goes to a thread here; a message with "Actions" in it asks for GitHub Actions.
+  const where = said.includes("Actions") ? { execution: "linux" as const } : {};
   if (said.includes("读完再派活") && last?.role === "tool" && toolOf(last.content) === "web_fetch") return { tool: "cloud_task", input: cloudJob("偷偷派的") };
   // A thread's file read first, then a task: refused like one after a web page.
   if (said.includes("读完文件再派活") && last?.role === "tool" && toolOf(last.content) === "find") return { tool: "cloud_task", input: cloudJob("偷偷派的") };
-  if (said.includes("派四单") && last?.role === "tool" && toolResultsSince(prompt) < 4) return { tool: "cloud_task", input: cloudJob(`第 ${toolResultsSince(prompt) + 1} 单`) };
+  if (said.includes("派四单") && last?.role === "tool" && toolResultsSince(prompt) < 4) return { tool: "cloud_task", input: { ...cloudJob(`第 ${toolResultsSince(prompt) + 1} 单`), ...where } };
   // The heartbeat: with alarms on it first asks for an alarm too soon for a turn of its own (refused), then one far
   // enough ahead, and passes; with them off it reaches out.
   if (said.startsWith("(Not from them: a heartbeat")) {
@@ -160,16 +162,14 @@ function decide(options: LanguageModelV4CallOptions): { text: string; delayMs?: 
   if (said.includes("翻翻聊天")) return { tool: "find", input: { in: "chat", words: said.split("翻翻聊天")[1].trim() } };
   // A file handed over in the chat (made-files.ts): no extension given, so it becomes .md.
   if (said.includes("做个文件")) return { tool: "make_file", input: { name: "周末/计划", content: "# 周末计划\n\n- 去公园\n- 早点睡" } };
-  if (said.includes("派四单")) return { tool: "cloud_task", input: cloudJob("第 1 单") };
+  if (said.includes("派四单")) return { tool: "cloud_task", input: { ...cloudJob("第 1 单"), ...where } };
   if (said.includes("后台写文件")) return { tool: "cloud_task", input: { title: "工作区写入测试", job: "workspace-write-test", execution: "local" } };
   if (said.includes("后台接着读")) return { tool: "cloud_task", input: { title: "工作区读取测试", job: "workspace-read-test", execution: "local", follow_up_of: said.match(/t_[0-9a-f]{10}/)?.[0] } };
   if (said.includes("Linux派活")) return { tool: "cloud_task", input: { ...cloudJob("Linux测试"), execution: "linux" } };
   // A job with a role from the settings page (task-roles.ts): only what this job needs, the role says the rest.
   if (said.includes("角色线程接着做")) return { tool: "cloud_task", input: { title: "接着干", job: "再看一遍。", execution: "local", follow_up_of: said.match(/t_[0-9a-f]{10}/)?.[0] } };
   if (said.includes("按角色派活")) return { tool: "cloud_task", input: { title: "按角色干", job: "看一下 README。", execution: "local", role: said.split("按角色派活")[1].trim() } };
-  // Synthetic local desktop integration only; the real model never uses this scripted scenario.
-  if (said.includes("桌面只读派活")) return { tool: "cloud_task", input: { title: "本机只读联调", job: "仅列出 DSH 中已授权工作区的条目，不写入或修改任何文件。", execution: "desktop" } };
-  if (said.includes("派活")) return { tool: "cloud_task", input: { ...cloudJob("修 README 的错字"), repo: "wusaki0723/aelios-resident" } };
+  if (said.includes("派活")) return { tool: "cloud_task", input: { ...cloudJob("修 README 的错字"), repo: "wusaki0723/aelios-resident", ...where } };
   if (said.includes("接着派")) {
     const earlier = [...prompt.map((m) => textOf(m.content)).join("\n").matchAll(/\bt_[0-9a-f]{10}\b/g)].at(-1)?.[0];
     return { tool: "cloud_task", input: { ...cloudJob("接着修"), follow_up_of: earlier } };

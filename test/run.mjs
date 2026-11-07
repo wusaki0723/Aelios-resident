@@ -12,7 +12,7 @@
 //   mcp-2    run after mcp and restart.sh: the connections come back
 //   stickers sticker packs: imported from a zip and from Telegram, sent, drawn, shown on the web page
 //   voice    voice messages: heard, answered in a voice, send_voice, each provider's request, falling back to text
-//   tasks    后台帮忙: a job sent through a scheduled task's trigger, its reports, the cards, the limits; threads here,
+//   tasks    后台帮忙: a job sent to GitHub Actions, its reports, the cards, the limits; threads here,
 //            what the web page shows of them, their files, and writing to one directly; the resident finding its
 //            threads, their files and the chat again
 //   tasks-roles  roles for threads: their templates and models, kept by what follows in the thread
@@ -1495,14 +1495,15 @@ if (phase === "voice") {
 if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
   await fetch(`${MOCK}/__reset`);
   const KEY = "test-web-key";
-  const URL_OK = "https://api.anthropic.com/v1/claude_code/routines/trig_testtask01/fire";
   const set = async (settings) => {
     for (const [key, text] of Object.entries(settings)) {
       const response = await web("/web/config", KEY, { key, text });
       assert.equal(response.status, 200, `${key}: ${await response.clone().text()}`);
     }
   };
-  const fires = async () => (await log()).filter((e) => e.kind === "routine.fire");
+  // The runs the resident started on GitHub Actions, each with the job it carried as body.text.
+  const fires = async () => (await log()).filter((e) => e.kind === "github.dispatch").map((e) => ({ ...e, body: { text: e.body.inputs.job } }));
+  const runUrl = (n) => `https://github.com/octo/resident-hands/actions/runs/${n}`;
   const tasks = async () => (await (await web("/web/tasks", KEY)).json());
   const ask = async (text, count = 1) => {
     const before = (await sent()).length;
@@ -1522,12 +1523,9 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
   };
 
   if (phase === "tasks") {
-    await step("off by default: no cloud_task tool, nor find or make_file, even with the trigger filled in, until it is turned on; a wrong address is not taken", async () => {
+    await step("off by default: no cloud_task tool, nor find or make_file, even with the GitHub token filled in, until it is turned on", async () => {
       assert.match(await ask("云端工具有哪些"), /没有 cloud_task。找不了旧线程和聊天记录。出不了文件。/);
-      const bad = await web("/web/config", KEY, { key: "CLOUD_TASK_URL", text: "https://example.com/fire" });
-      assert.equal(bad.status, 400);
-      assert.match((await bad.json()).error, /API 触发网址/);
-      await set({ CLOUD_TASK_URL: URL_OK, CLOUD_TASK_TOKEN: "good-token" });
+      await set({ CLOUD_TASK_GITHUB_TOKEN: "good-token" });
       assert.ok(!JSON.stringify(await (await web("/web/config", KEY)).json()).includes("good-token"), "the token is not sent back");
       assert.match(await ask("云端工具有哪些"), /没有 cloud_task/);
       assert.match(await ask("/status"), /后台帮忙：关/);
@@ -1536,37 +1534,58 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       assert.match(await ask("云端工具有哪些"), /有 cloud_task。也能找旧线程和聊天记录。能出文件。/);
     });
 
-    await step("the settings page gives the scheduled task's prompt, with this resident's address in it", async () => {
+    await step("the settings page knows this resident's address, and has no scheduled-task prompt any more", async () => {
       const shown = await tasks();
       assert.deepEqual([shown.on, shown.configured], [true, true]);
       assert.equal(shown.origin, WORKER);
-      assert.ok(shown.prompt.includes(`curl -sS -X POST ${WORKER}/tasks/<task>/progress -H "x-task-code: <code>"`));
-      assert.ok(shown.prompt.includes(`${WORKER}/tasks/<task>/result`));
-      assert.match(shown.prompt, /routine-fire-payload/);
-      assert.match(shown.prompt, /Never push to a default branch/);
+      assert.equal(shown.prompt, undefined);
       assert.deepEqual([shown.today, shown.limit, shown.tasks.length], [0, 10, 0]);
       assert.equal((await fetch(`${WORKER}/web/tasks`)).status, 401, "not without the web key");
+    });
+
+    await step("GitHub Actions with one token: the resident sets up a private repository", async () => {
+      // A token that cannot write workflow files says so on the settings page.
+      await set({ CLOUD_TASK_GITHUB_TOKEN: "no-workflow-token" });
+      const refused = await web("/web/tasks/github", KEY, {});
+      assert.equal(refused.status, 400);
+      assert.match((await refused.json()).error, /写不了工作流文件/);
+      const bad = await tasks();
+      assert.deepEqual([bad.github.on, bad.github.repo], [true, ""]);
+      assert.match(bad.github.problem, /写不了工作流文件/);
+
+      await set({ CLOUD_TASK_GITHUB_TOKEN: "good-token" });
+      const setUp = await web("/web/tasks/github", KEY, {});
+      assert.equal(setUp.status, 200);
+      const shown = await setUp.json();
+      assert.equal(shown.mode, "linux");
+      assert.deepEqual([shown.github.repo, shown.github.url, shown.github.problem], ["octo/resident-hands", "https://github.com/octo/resident-hands", ""]);
+      assert.match(shown.github.tokenPage, /scopes=repo,workflow/);
+      assert.ok(!JSON.stringify(shown).includes("good-token"), "the token is not sent back");
+      const made = (await log()).filter((e) => e.kind === "github.create");
+      assert.equal(made.length, 1);
+      assert.equal(made[0].body.private, true);
+      assert.deepEqual((await log()).filter((e) => e.kind === "github.file").map((e) => [e.path, e.branch]).at(-1), [".github/workflows/resident-hands.yml", "main"]);
     });
 
     let first;
     let next;
     let localThread;
-    await step("asked on Telegram, the job goes out through the trigger with its task and code, and nothing of the chat", async () => {
-      const out = await ask("派活");
+    await step("asked on Telegram, the job goes out to GitHub Actions with its task and code, and nothing of the chat", async () => {
+      const out = await ask("Actions派活");
       const [fire] = await fires();
-      assert.equal(fire.trigger, "trig_testtask01");
-      assert.deepEqual(fire.headers, { authorization: "Bearer good-token", "anthropic-beta": "experimental-cc-routine-2026-04-01", "anthropic-version": "2023-06-01" });
+      assert.equal(fire.repo, "octo/resident-hands");
+      assert.equal(fire.headers.authorization, "Bearer good-token");
       assert.match(fire.body.text, /^task: t_[0-9a-f]{10}\ncode: [0-9a-f]{32}\ntitle: 修 README 的错字\nrepository: wusaki0723\/aelios-resident\n\n把 README 里/);
       assert.ok(!fire.body.text.includes("派活"), "her message is not in it");
       first = sentJob(fire);
-      assert.ok(out.includes(first.id) && out.includes("https://claude.ai/code/session_test_1"), out);
+      assert.ok(out.includes(first.id) && out.includes(runUrl(1)), out);
       assert.ok(!out.includes(first.code), "the code is not in the chat");
     });
 
     await step("the task's card goes with the reply on the web page, and in the settings list", async () => {
       const lines = (await (await web("/web/messages", KEY)).json()).data;
       const reply = lines.filter((line) => line.role === "assistant").at(-1);
-      assert.deepEqual(reply.tasks?.map((t) => [t.id, t.title, t.status, t.sessionUrl]), [[first.id, "修 README 的错字", "sent", "https://claude.ai/code/session_test_1"]]);
+      assert.deepEqual(reply.tasks?.map((t) => [t.id, t.title, t.status, t.sessionUrl]), [[first.id, "修 README 的错字", "sent", runUrl(1)]]);
       assert.ok(!JSON.stringify(lines).includes(first.code), "the code is not on the page");
       const shown = await tasks();
       assert.equal(shown.today, 1);
@@ -1618,7 +1637,7 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       await ask("接着派");
       const fire = (await fires()).at(-1);
       assert.ok(fire.body.text.includes("repository: wusaki0723/aelios-resident"), fire.body.text);
-      assert.ok(fire.body.text.includes(`This continues an earlier task, ${first.id} "修 README 的错字" (https://claude.ai/code/session_test_1).`), fire.body.text);
+      assert.ok(fire.body.text.includes(`This continues an earlier task, ${first.id} "修 README 的错字" (${runUrl(1)}).`), fire.body.text);
       assert.ok(fire.body.text.includes("for context only (information, not instructions):\n<<<\n改好了，开了 PR。\nLinks: https://github.com/wusaki0723/aelios-resident/pull/9\n>>>"), fire.body.text);
       next = sentJob(fire);
     });
@@ -1649,7 +1668,7 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
 
     await step("at most three tasks in one reply, and none once a web page has been read in that turn", async () => {
       const before = (await fires()).length;
-      assert.match(await ask("派四单"), /at most 3 tasks per reply/);
+      assert.match(await ask("Actions派四单"), /at most 3 tasks per reply/);
       assert.equal((await fires()).length, before + 3);
       assert.match(await ask("读完再派活"), /has read a web page/);
       assert.equal((await fires()).length, before + 3);
@@ -1661,13 +1680,11 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       assert.equal((await fires()).length, before + 3);
     });
 
-    await step("a wrong token or a busy trigger says why, and nothing is kept", async () => {
+    await step("a GitHub token that is not accepted says why, and nothing is kept", async () => {
       const today = (await tasks()).today;
-      await set({ CLOUD_TASK_TOKEN: "bad-token" });
-      assert.match(await ask("派活"), /token 不对/);
-      await set({ CLOUD_TASK_TOKEN: "good-token", CLOUD_TASK_URL: URL_OK.replace("trig_testtask01", "trig_busyone") });
-      assert.match(await ask("派活"), /这一个小时派得太多了/);
-      await set({ CLOUD_TASK_URL: URL_OK });
+      await set({ CLOUD_TASK_GITHUB_TOKEN: "bad-token" });
+      assert.match(await ask("Actions派活"), /GitHub 不认这个 token/);
+      await set({ CLOUD_TASK_GITHUB_TOKEN: "good-token" });
       assert.equal((await tasks()).today, today);
     });
 
@@ -1691,15 +1708,15 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
     });
 
     await step("/status says it is set up and how many went out", async () => {
-      assert.match(await ask("/status"), /后台帮忙：开，默认交给 claude\.ai 的云端 Claude Code，轻活交给自己的线程；24 小时内派了 8 单，在干的 2 单/);
+      assert.match(await ask("/status"), /后台帮忙：开，交给自己的线程，要跑命令的交给 GitHub Actions；24 小时内派了 8 单，在干的 2 单/);
     });
 
-    await step("an external thread opens on the web page with what was asked and what came back; it is not written to here", async () => {
+    await step("a thread on GitHub Actions opens on the web page with what was asked and what came back; it is not written to here", async () => {
       const thread = await (await web(`/web/thread?id=${first.id}`, KEY)).json();
-      assert.deepEqual([thread.id, thread.title, thread.runs, thread.canSay, thread.files.length], [first.id, "修 README 的错字", "external", false, 0]);
+      assert.deepEqual([thread.id, thread.title, thread.runs, thread.canSay, thread.files.length], [first.id, "修 README 的错字", "linux", false, 0]);
       assert.deepEqual(thread.lines.slice(0, 2).map((line) => line.role), ["user", "result"]);
       assert.match(thread.lines[0].text, /^把 README 里/);
-      assert.deepEqual([thread.lines[1].status, thread.lines[1].text, thread.lines[1].sessionUrl], ["done", "改好了，开了 PR。", "https://claude.ai/code/session_test_1"]);
+      assert.deepEqual([thread.lines[1].status, thread.lines[1].text, thread.lines[1].sessionUrl], ["done", "改好了，开了 PR。", runUrl(1)]);
       assert.ok(!JSON.stringify(thread).includes(first.code), "no code on the page");
       const said = await web("/web/thread/say", KEY, { id: first.id, text: "再改改" });
       assert.equal(said.status, 400);
@@ -1712,13 +1729,8 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       assert.ok(!listed.some((item) => item.title === "接通测试"), "tests are not threads");
     });
 
-    await step("without a trigger, jobs go to the resident's own threads and report back", async () => {
-      await set({ CLOUD_TASK_URL: URL_OK, CLOUD_TASK_TOKEN: "" });
-      const partial = await tasks();
-      assert.deepEqual([partial.on, partial.configured, partial.mode], [true, false, "incomplete"]);
-      assert.match(await ask("/status"), /后台帮忙：开了，自己的线程能干；claude.ai 的触发网址或 token 没填对/);
-
-      await set({ CLOUD_TASK_URL: "", CLOUD_TASK_TOKEN: "" });
+    await step("without a GitHub token, jobs go to the resident's own threads and report back", async () => {
+      await set({ CLOUD_TASK_GITHUB_TOKEN: "" });
       const localState = await tasks();
       assert.deepEqual([localState.on, localState.configured, localState.mode], [true, true, "local"]);
       assert.match(await ask("/status"), /后台帮忙：开，交给自己的线程；24 小时内派了 8 单，在干的 2 单/);
@@ -1726,14 +1738,14 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       const firesBefore = (await fires()).length;
       const out = await ask("派活");
       const afterAsk = (await sent()).length;
-      assert.equal((await fires()).length, firesBefore, "not sent to the external routine trigger");
+      assert.equal((await fires()).length, firesBefore, "not sent to GitHub Actions");
       const id = out.match(/\bt_[0-9a-f]{10}\b/)?.[0];
       assert.ok(id, out);
       localThread = id;
       const reportOut = (await waitForSends(afterAsk, 1)).join("\n");
       assert.ok(reportOut.startsWith(`云端回来了：(Not from them: your cloud task ${id} "修 README 的错字" reported back: it is done.`), reportOut);
       assert.match(reportOut, /后台做好了：.*第 28 章/);
-      assert.ok(!reportOut.includes("Session:"), "no external session link in a note about a thread here");
+      assert.ok(!reportOut.includes("Session:"), "no session link in a note about a thread here");
       const card = (await tasks()).tasks.find((t) => t.id === id);
       assert.deepEqual([card.status, card.sessionUrl, card.links, card.runs, card.thread], ["done", "", ["https://example.com/note"], "local", id]);
       assert.equal(card.progress, "正在看小本本：经济师进度");
@@ -1859,29 +1871,8 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       assert.deepEqual(left.map((line) => line.id), [kept.id]);
     });
 
-    await step("GitHub Actions with one token: the resident sets up a private repository, starts runs there, and lends a run its GitHub token and model", async () => {
-      // A token that cannot write workflow files says so on the settings page.
-      await set({ CLOUD_TASK_GITHUB_TOKEN: "no-workflow-token" });
-      const refused = await web("/web/tasks/github", KEY, {});
-      assert.equal(refused.status, 400);
-      assert.match((await refused.json()).error, /写不了工作流文件/);
-      const bad = await tasks();
-      assert.deepEqual([bad.github.on, bad.github.repo], [true, ""]);
-      assert.match(bad.github.problem, /写不了工作流文件/);
-
+    await step("GitHub Actions: a test run starts there, and lends a run its GitHub token and model", async () => {
       await set({ CLOUD_TASK_GITHUB_TOKEN: "good-token" });
-      const setUp = await web("/web/tasks/github", KEY, {});
-      assert.equal(setUp.status, 200);
-      const shown = await setUp.json();
-      assert.equal(shown.mode, "linux");
-      assert.deepEqual([shown.github.repo, shown.github.url, shown.github.problem], ["octo/resident-hands", "https://github.com/octo/resident-hands", ""]);
-      assert.match(shown.github.tokenPage, /scopes=repo,workflow/);
-      assert.ok(!JSON.stringify(shown).includes("good-token"), "the token is not sent back");
-      const made = (await log()).filter((e) => e.kind === "github.create");
-      assert.equal(made.length, 1);
-      assert.equal(made[0].body.private, true);
-      assert.deepEqual((await log()).filter((e) => e.kind === "github.file").map((e) => [e.path, e.branch]).at(-1), [".github/workflows/resident-hands.yml", "main"]);
-
       // A test run there: the job and the resident's address go in, and the card links to that run.
       const ghRes = await web("/web/tasks/test", KEY, { execution: "linux" });
       assert.equal(ghRes.status, 200);
@@ -1945,12 +1936,6 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       assert.equal(done.status, 409);
       assert.deepEqual(await done.json(), { error: "this task is finished", finished: true });
       assert.equal((await card()).status, "done");
-
-      await set({ CLOUD_TASK_URL: URL_OK, CLOUD_TASK_TOKEN: "good-token" });
-      assert.equal((await tasks()).mode, "all", "claude.ai and GitHub Actions both set up");
-      assert.match(await ask("/status"), /默认交给 claude.ai 的云端 Claude Code，轻活交给自己的线程，也能交给 GitHub Actions/);
-      await set({ CLOUD_TASK_GITHUB_TOKEN: "" });
-      assert.equal((await tasks()).mode, "external");
     });
 
     await step("ten a day at most, on the settings page and in the chat", async () => {
@@ -1959,7 +1944,7 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
       assert.equal(over.status, 400);
       assert.match((await over.json()).error, /已经派了 10 单/);
       assert.match(await ask("派活"), /10 tasks have gone out in the last 24 hours/);
-      assert.equal((await fires()).length, 10, "8 sent to the Claude trigger (1 ran locally, 1 on GitHub Actions), the wrong token and the busy trigger tried");
+      assert.equal((await fires()).length, 9, "9 runs on GitHub Actions: 8 sent by the resident and the test run (1 more ran locally)");
     });
   }
 
@@ -2016,14 +2001,15 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
   }
 
   if (phase === "tasks-quiet") {
-    await set({ CLOUD_TASKS: "on", CLOUD_TASK_URL: URL_OK, CLOUD_TASK_TOKEN: "good-token" });
+    await set({ CLOUD_TASKS: "on", CLOUD_TASK_GITHUB_TOKEN: "good-token" });
+    await tasks();
     await step("a task that never reports: after the quiet time she is told, with the link, and a late result still comes through", async () => {
-      await ask("派活");
+      await ask("Actions派活");
       const { id, code } = sentJob((await fires())[0]);
       const before = (await sent()).length;
       const out = (await waitForSends(before, 1, 30000)).join("\n");
       assert.ok(out.startsWith(`云端回来了：(Not from them: your cloud task ${id} "修 README 的错字" has not reported back after 1 minute.`), out);
-      assert.ok(out.includes("https://claude.ai/code/session_test_1"));
+      assert.ok(out.includes(runUrl(1)));
       assert.equal((await tasks()).tasks[0].status, "quiet");
       assert.equal((await report(id, "progress", code, { line: "还在改" })).status, 200);
       assert.equal((await tasks()).tasks[0].status, "working");
@@ -2034,7 +2020,7 @@ if (phase === "tasks" || phase === "tasks-quiet" || phase === "tasks-roles") {
     });
 
     await step("one that keeps sending progress is not called quiet", async () => {
-      await ask("派活");
+      await ask("Actions派活");
       const { id, code } = sentJob((await fires()).at(-1));
       assert.equal((await report(id, "progress", code, { line: "开始了" })).status, 200);
       const before = (await sent()).length;
@@ -2561,12 +2547,13 @@ if (phase === "wecom") {
   });
 
   await step("a cloud task's result, outside any turn, goes to WeCom, where she last wrote", async () => {
-    await set({ CLOUD_TASKS: "on", CLOUD_TASK_URL: "https://api.anthropic.com/v1/claude_code/routines/trig_testtask01/fire", CLOUD_TASK_TOKEN: "good-token" });
+    await set({ CLOUD_TASKS: "on", CLOUD_TASK_GITHUB_TOKEN: "good-token" });
+    await web("/web/tasks", "test-web-key");
     const before = (await texts()).length;
-    await push({ MsgType: "text", Content: "派活" });
+    await push({ MsgType: "text", Content: "Actions派活" });
     await waitFor(texts, before, 1);
-    const fire = (await ofKind("routine.fire")).at(-1);
-    const [, id, code] = fire.body.text.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
+    const fire = (await ofKind("github.dispatch")).at(-1);
+    const [, id, code] = fire.body.inputs.job.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
     assert.ok(id && code);
     await sleep(1500);
     const after = (await texts()).length;
@@ -2581,10 +2568,10 @@ if (phase === "wecom") {
     await post("TG 也在");
     const out = await waitForSends(before, 2);
     assert.match(out[0], /TG 也在/);
-    await post("派活");
+    await post("Actions派活");
     await waitForSends(before + 2, 1);
-    const fire = (await ofKind("routine.fire")).at(-1);
-    const [, id, code] = fire.body.text.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
+    const fire = (await ofKind("github.dispatch")).at(-1);
+    const [, id, code] = fire.body.inputs.job.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
     await sleep(1500);
     const tg = (await sent()).length;
     const wecom = (await texts()).length;
@@ -3281,10 +3268,11 @@ if (phase === "web") {
   });
 
   await step("a thread that needs her offers answers; the one she taps is said to the resident, once", async () => {
-    await set({ CLOUD_TASKS: "on", CLOUD_TASK_URL: "https://api.anthropic.com/v1/claude_code/routines/trig_testtask01/fire", CLOUD_TASK_TOKEN: "good-token" });
-    await say({ text: "派活" });
-    const fire = (await log()).filter((e) => e.kind === "routine.fire").at(-1);
-    const [, id, code] = fire.body.text.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
+    await set({ CLOUD_TASKS: "on", CLOUD_TASK_GITHUB_TOKEN: "good-token" });
+    await json("/web/tasks");
+    await say({ text: "Actions派活" });
+    const fire = (await log()).filter((e) => e.kind === "github.dispatch").at(-1);
+    const [, id, code] = fire.body.inputs.job.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
     assert.ok(id && code);
     const asked = await fetch(`${WORKER}/tasks/${id}/result`, { method: "POST", headers: { "content-type": "application/json", "x-task-code": code },
       body: JSON.stringify({ status: "needs_you", summary: "用哪个标题？", choices: ["短的", "长的", "短的"] }) });
@@ -3324,17 +3312,17 @@ if (phase === "web") {
     await changed("her words and the reply");
     assert.equal((await json("/web/model", { text: "" })).status, 200);
     await changed("a notice in the chat");
-    await say({ text: "派活" });
+    await say({ text: "Actions派活" });
     await changed("a thread sent");
-    const fire = (await log()).filter((e) => e.kind === "routine.fire").at(-1);
-    const [, id, code] = fire.body.text.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
+    const fire = (await log()).filter((e) => e.kind === "github.dispatch").at(-1);
+    const [, id, code] = fire.body.inputs.job.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
     assert.equal((await fetch(`${WORKER}/tasks/${id}/progress`, { method: "POST", headers: { "content-type": "application/json", "x-task-code": code }, body: JSON.stringify({ line: "改到一半" }) })).status, 200);
     await changed("a thread's progress on its card");
   });
 
   await step("one that waits for her with nothing to pick is put aside with 不用了, and stops asking everywhere", async () => {
-    const fire = (await log()).filter((e) => e.kind === "routine.fire").at(-1);
-    const [, id, code] = fire.body.text.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
+    const fire = (await log()).filter((e) => e.kind === "github.dispatch").at(-1);
+    const [, id, code] = fire.body.inputs.job.match(/^task: (t_[0-9a-f]{10})\ncode: ([0-9a-f]{32})\n/) ?? [];
     const asked = await fetch(`${WORKER}/tasks/${id}/result`, { method: "POST", headers: { "content-type": "application/json", "x-task-code": code },
       body: JSON.stringify({ status: "needs_you", summary: "要你看一下 PR。" }) });
     assert.equal(asked.status, 200);
